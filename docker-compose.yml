@@ -1,13 +1,15 @@
 version: "3.9"
 
 services:
-  indexer:
+  backend:
     build: ./backend
     volumes:
-      - ./incoming:/data      # <-- tout ton incoming devient directement /data
+      - ./incoming:/data
       - db:/db
     ports:
       - "8000:8000"
+    environment:
+      - SECRET_KEY=supersecretkey
 
   frontend:
     image: node:20-alpine
@@ -16,7 +18,15 @@ services:
       - ./frontend:/app
     ports:
       - "3000:3000"
-    command: sh -c "npm install axios && npm run dev -- --host 0.0.0.0 --port 3000"
+    command: >
+      sh -c "
+        if [ ! -d node_modules ]; then
+          echo 'Installation des dépendances...'
+          npm install
+        fi &&
+        echo 'Démarrage du frontend...' &&
+        npm run dev -- --host 0.0.0.0 --port 3000
+      "
+
 volumes:
-  extracted:
   db:

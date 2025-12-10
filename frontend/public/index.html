@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="fr" class="h-full">
+<html lang="fr" class="h-full bg-gray-900">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Leak Hunter 2025</title>
     
-    <!-- TAILWIND CDN – ÇA MARCHE DIRECT -->
+    <!-- TAILWIND CDN (fonctionne direct, pas besoin de build) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -14,14 +14,13 @@
           extend: {
             colors: {
               primary: '#a855f7',
-              dark: '#0f0f0f',
             }
           }
         }
       }
     </script>
   </head>
-  <body class="h-full bg-gray-900 text-white">
+  <body class="h-full">
     <div id="root" class="h-full"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

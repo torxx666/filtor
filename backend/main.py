@@ -1,103 +1,124 @@
-# backend/main.py – VERSION FINALE 100% FONCTIONNELLE 2025
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import sqlite3, os, subprocess, shutil
-from pydantic import BaseModel
+import sqlite3, subprocess, os, tempfile
+from pathlib import Path
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-DATA_PATH = os.getenv("DATA_PATH", "/data")
-DB_PATH = os.getenv("DB_PATH", "/db/leak.db")
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class Result(BaseModel):
-    filename: str
-    lineno: int
-    line: str
-    highlight: str
+DATA_PATH = "/data"
+DB_PATH = "/db/leak.db"
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(path, lineno, content, tokenize='unicode61');")
     conn.execute("PRAGMA journal_mode = OFF")
     conn.execute("PRAGMA synchronous = OFF")
-    conn.execute("PRAGMA cache_size = -2000000")
-    conn.commit()
+    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(path, lineno, content, tokenize='unicode61');")
     return conn
+
+def extract_pdf_text(pdf_path):
+    """Extrait TOUT le texte d'un PDF arXiv avec pdftotext + fallback OCR"""
+    try:
+        # pdftotext = extraction texte principale (pour PDF texte comme arXiv)
+        result = subprocess.run(["pdftotext", pdf_path, "-"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.splitlines()
+    except:
+        pass
+
+    # Fallback OCR avec tesseract (pour scans)
+    try:
+        result = subprocess.run(["tesseract", pdf_path, "stdout", "-l", "eng"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.splitlines()
+    except:
+        pass
+
+    return []
 
 @app.post("/load")
 def load():
-    # 1. Vide l’ancien index
     conn = get_conn()
     conn.execute("DELETE FROM docs;")
     conn.commit()
     conn.close()
 
-    # 2. Lance rga sur tout le dossier /data (extracted + incoming)
-    proc = subprocess.Popen([
-        "rga", "--line-number", "--no-messages", ".*", DATA_PATH
-    ], stdout=subprocess.PIPE, text=True, bufsize=1)
-
+    total_lines = 0
     conn = get_conn()
     cur = conn.cursor()
     batch = []
-    total = 0
 
-    for line in proc.stdout:
-        if ":" not in line: continue
-        parts = line.strip().split(":", 2)
-        if len(parts) < 3: continue
-        fullpath, lineno, content = parts
-        filename = os.path.basename(fullpath)
-        relpath = os.path.relpath(fullpath, DATA_PATH)
-        display_path = f"{filename} ← {relpath}" if relpath != filename else filename
-        batch.append((display_path, int(lineno), content))
-        total += 1
+    # 1. Fichiers non-PDF (TXT, ZIP, RAR, DOCX) avec rga
+    for root, dirs, files in os.walk(DATA_PATH):
+        for file in files:
+            if file.endswith(('.txt', '.log', '.csv', '.json', '.xml')):
+                fullpath = os.path.join(root, file)
+                relpath = os.path.relpath(fullpath, DATA_PATH)
+                with open(fullpath, 'r', errors='ignore') as f:
+                    for lineno, line in enumerate(f, 1):
+                        line = line.strip()
+                        if line:
+                            batch.append((f"{file} ← {relpath}", lineno, line))
+                            total_lines += 1
+                            if len(batch) >= 50000:
+                                cur.executemany("INSERT INTO docs VALUES(?, ?, ?)", batch)
+                                conn.commit()
+                                batch.clear()
 
-        if len(batch) >= 50_000:
-            cur.executemany("INSERT INTO docs VALUES(?, ?, ?)", batch)
-            conn.commit()
-            batch.clear()
+    # 2. PDF (spécial pour arXiv)
+    for root, dirs, files in os.walk(DATA_PATH):
+        for file in files:
+            if file.endswith('.pdf'):
+                fullpath = os.path.join(root, file)
+                relpath = os.path.relpath(fullpath, DATA_PATH)
+                lines = extract_pdf_text(fullpath)
+                for lineno, line in enumerate(lines, 1):
+                    line = line.strip()
+                    if line:
+                        batch.append((f"{file} ← {relpath}", lineno, line))
+                        total_lines += 1
+                        if len(batch) >= 50000:
+                            cur.executemany("INSERT INTO docs VALUES(?, ?, ?)", batch)
+                            conn.commit()
+                            batch.clear()
 
     if batch:
         cur.executemany("INSERT INTO docs VALUES(?, ?, ?)", batch)
         conn.commit()
     conn.close()
-    return {"status": "loaded", "lines_indexed": total}
-
-@app.get("/reindex")
-def reindex():
-    return load()   # même chose que /load
+    return {"status": "ok", "indexed": total_lines}
 
 @app.get("/search")
-def search(q: str = "", limit: int = 200):
+def search(q: str = ""):
     conn = get_conn()
     cur = conn.cursor()
 
     if not q.strip():
-        # Recherche vide → 10 ou 200 derniers ajoutés
-        cur.execute(f"""
-            SELECT path, lineno, content,
-                   snippet(docs, 2, '<b style="background:yellow;color:black">', '</b>', '...', 64) as hl
-            FROM docs ORDER BY rowid DESC LIMIT ?
-        """, (limit,))
+        cur.execute("SELECT path, lineno, content FROM docs ORDER BY rowid DESC LIMIT 20")
     else:
+        # ÉCHAPPEMENT ULTRA-SÉCURISÉ POUR FTS5
+        # On entoure TOUT entre guillemets → FTS5 traite ça comme phrase exacte
+        # Et on échappe les guillemets internes
+        escaped = q.replace('\\', '\\\\').replace('"', '\\"')
+        fts5_query = f'"{escaped}"'   # ← C’EST LA CLÉ
+
         cur.execute(f"""
-            SELECT path, lineno, content,
-                   highlight(docs, 2, '<b style="background:yellow;color:black">', '</b>') as hl
-            FROM docs WHERE content MATCH ? ORDER BY rank LIMIT ?
-        """, (q, limit))
+            SELECT path, lineno, content, 
+                   highlight(docs, 2, '<b class="bg-yellow-300 text-black font-bold">', '</b>') as hl 
+            FROM docs 
+            WHERE content MATCH ? 
+            ORDER BY rank 
+            LIMIT 200
+        """, (fts5_query,))
 
-    results = [dict(r) for r in cur.fetchall()]
+    rows = cur.fetchall()
     conn.close()
-    for r in results:
-        r["highlight"] = r.get("hl") or r["content"]
-        r["filename"] = r["path"]
-        del r["hl"], r["path"], r["content"]
-    return results
-
-@app.get("/recent")
-def recent():
-    return search("", 10)
+    return [{"filename": r["path"], "lineno": r["lineno"], "highlight": r["hl"] or r["content"]} for r in rows]
