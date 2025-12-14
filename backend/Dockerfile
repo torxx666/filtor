@@ -20,7 +20,7 @@ ENV RGA_MAX_FILE_SIZE=500M
 
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir fastapi uvicorn[standard]
+RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
 
 WORKDIR /app
 COPY main.py .
