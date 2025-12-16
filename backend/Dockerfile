@@ -6,6 +6,7 @@ RUN apt update && apt install -y --no-install-recommends \
     curl ca-certificates ripgrep fd-find \
     poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra \
     pandoc p7zip-full unrar unzip python3 python3-pip python3-venv \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # rga (pour ZIP/RAR/DOCX)
@@ -20,7 +21,14 @@ ENV RGA_MAX_FILE_SIZE=500M
 
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn[standard] \
+    python-multipart \
+    textract \
+    python-magic \
+    loguru \
+    setuptools
 
 WORKDIR /app
 COPY main.py .

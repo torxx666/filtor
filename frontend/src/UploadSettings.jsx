@@ -3,33 +3,58 @@ import axios from 'axios';
 
 
 
-function UploadSettings({ mode, setMode }) {
+function UploadSettings() {
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
 
   const handleUpload = async () => {
     setProgress(20);
-    setStatus('Indexation en cours...');
+    setStatus('Indexing in progress...');
     try {
       const res = await axios.post('http://localhost:8000/load');
       setProgress(100);
       setStatus(
         <span className="text-green-400">
-          Indexation terminée !<br />
-          → {res.data.files_detected || 0} fichier(s) détecté(s)<br />
-          → {(res.data.lines_indexed || 0).toLocaleString()} ligne(s) indexée(s)
+          {res.data.message || 'Indexing started in background!'}<br />
+          Check the File Statistics page to see results.
         </span>
       );
     } catch (e) {
       console.error(e);
       const msg = e.response?.data?.detail || e.message;
-      setStatus(<span className="text-red-400">Erreur: {msg}</span>);
+      setStatus(<span className="text-red-400">Error: {msg}</span>);
     }
   };
 
   // Drag & drop logic
-  const handleDrop = async (e) => {
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Common DND prevent defaults
+  const preventDefaults = (e) => {
     e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragEnter = (e) => {
+    preventDefaults(e);
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    preventDefaults(e);
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e) => {
+    preventDefaults(e);
+    // Explicitly show copy effect
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDrop = async (e) => {
+    preventDefaults(e);
+    setIsDragging(false);
+
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
@@ -43,7 +68,7 @@ function UploadSettings({ mode, setMode }) {
         await axios.post('http://localhost:8000/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
-        setProgress(10 + ((i + 1) / files.length) * 40); // Upload takes up to 50%
+        setProgress(10 + ((i + 1) / files.length) * 40);
       }
       setStatus('Upload finished. Indexing...');
       handleUpload(); // Trigger indexing after upload
@@ -61,12 +86,21 @@ function UploadSettings({ mode, setMode }) {
       <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
         <h2 className="text-xl font-semibold text-gray-300 mb-4">Data Indexing</h2>
         <div
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          onDragOver={e => e.preventDefault()}
-          className="border-2 border-dashed border-gray-600 bg-gray-700/30 p-12 rounded-xl text-center cursor-pointer hover:border-gray-500 hover:bg-gray-700/50 transition-all"
+          className={`border-2 border-dashed p-12 rounded-xl text-center cursor-pointer transition-all ${isDragging
+              ? 'border-blue-500 bg-blue-500/10 scale-[1.02]'
+              : 'border-gray-600 bg-gray-700/30 hover:border-gray-500 hover:bg-gray-700/50'
+            }`}
         >
-          <p className="text-gray-400 text-lg">Drag & drop ZIP/RAR/PDF files here</p>
-          <p className="text-gray-500 text-sm mt-2">or click to browse</p>
+          <div className="pointer-events-none">
+            <p className={`text-lg font-medium ${isDragging ? 'text-blue-400' : 'text-gray-400'}`}>
+              {isDragging ? 'Drop files here!' : 'Drag & drop ZIP/RAR/PDF files here'}
+            </p>
+            <p className="text-gray-500 text-sm mt-2">or click to browse</p>
+          </div>
         </div>
 
         <div className="mt-6 flex flex-col gap-4">
@@ -94,21 +128,7 @@ function UploadSettings({ mode, setMode }) {
         </div>
       </div>
 
-      {/* Configuration Section */}
-      <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
-        <h2 className="text-xl font-semibold text-gray-300 mb-4">Search Configuration</h2>
-        <div className="flex flex-col gap-2">
-          <label className="text-gray-400 text-sm">Search Logic</label>
-          <select
-            value={mode}
-            onChange={e => setMode(e.target.value)}
-            className="w-full md:w-1/2 p-3 bg-gray-900 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          >
-            <option value="default">Standard (Fast Phrase Match)</option>
-            <option value="deep">Deep Search (Thorough Substring)</option>
-          </select>
-        </div>
-      </div>
+
 
       {/* Database Management Section */}
       <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
@@ -141,7 +161,7 @@ function UploadSettings({ mode, setMode }) {
                   const file = e.target.files[0];
                   if (!file) return;
 
-                  if (!confirm("Attention: This will replace the entire current database. Continue?")) {
+                  if (!confirm("Warning: This will replace the entire current database. Continue?")) {
                     e.target.value = null; // Reset input
                     return;
                   }

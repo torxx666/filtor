@@ -1,30 +1,62 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import Sidebar from './components/Sidebar';
 
 function Files() {
     const [files, setFiles] = useState([]);
+    const [selectedFile, setSelectedFile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [indexingStatus, setIndexingStatus] = useState({ status: 'idle', current: 0, total: 0 });
 
     // Filters
     const [filterFound, setFilterFound] = useState('all'); // all, yes, no
     const [filterType, setFilterType] = useState('all');
+    const [filterStatus, setFilterStatus] = useState('All'); // NEW: Backend filter
     const [filterSize, setFilterSize] = useState('');
     const [filterSizeOp, setFilterSizeOp] = useState('>');
 
     useEffect(() => {
         fetchFiles();
-    }, []);
+
+        // Polling for indexing status
+        const interval = setInterval(async () => {
+            try {
+                const res = await axios.get('http://localhost:8000/status');
+                setIndexingStatus(res.data);
+
+                // Reload files if finished just now (simple check)
+                if (res.data.status === 'finished' && indexingStatus.status === 'scanning') {
+                    fetchFiles();
+                }
+            } catch (e) {
+                console.error("Status check failed", e);
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [indexingStatus.status, filterStatus]); // Re-fetch on filter change
 
     const fetchFiles = async () => {
         try {
-            const res = await axios.get('http://localhost:8000/files');
-            setFiles(res.data);
+            // Pass risk_level filter to backend
+            const params = filterStatus !== 'All' ? { risk_level: filterStatus } : {};
+            const res = await axios.get('http://localhost:8000/files', { params });
+            setFiles(res.data.files || res.data); // Handle {files: []} or []
             setLoading(false);
         } catch (e) {
             console.error(e);
-            setError('Impossible de charger la liste des fichiers.');
+            setError('Unable to load file list.');
             setLoading(false);
+        }
+    };
+
+    const triggerLoad = async () => {
+        try {
+            await axios.post('http://localhost:8000/load');
+            // Status polling will pick it up
+        } catch (e) {
+            alert("Error starting index: " + e.message);
         }
     };
 
@@ -38,11 +70,15 @@ function Files() {
 
     const formatDate = (timestamp) => {
         if (!timestamp) return 'N/A';
-        return new Date(timestamp * 1000).toLocaleString();
+        // Handle both Unix timestamp (number) and ISO string
+        const date = typeof timestamp === 'number'
+            ? new Date(timestamp * 1000)
+            : new Date(timestamp);
+        return date.toLocaleString();
     };
 
-    // Derived state for filters
-    const uniqueTypes = [...new Set(files.map(f => f.type))].sort();
+    // Derived state for filters (client-side filters for type/found/size)
+    const uniqueTypes = [...new Set(files.map(f => f.true_type || f.type))].sort();
 
     const filteredFiles = files.filter(file => {
         // Filter Found
@@ -50,7 +86,7 @@ function Files() {
         if (filterFound === 'no' && file.has_text) return false;
 
         // Filter Type
-        if (filterType !== 'all' && file.type !== filterType) return false;
+        if (filterType !== 'all' && (file.true_type || file.type) !== filterType) return false;
 
         // Filter Size
         if (filterSize !== '') {
@@ -64,16 +100,47 @@ function Files() {
         return true;
     });
 
+    const handleRowClick = (file) => {
+        setSelectedFile(file);
+    };
+
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 relative">
+            {selectedFile && (
+                <Sidebar
+                    file={selectedFile}
+                    onClose={() => setSelectedFile(null)}
+                />
+            )}
             <div className="flex justify-between items-center">
                 <h1 className="text-3xl font-bold text-gray-100">File Statistics</h1>
-                <button
-                    onClick={fetchFiles}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-                >
-                    Refresh
-                </button>
+                <div className="flex gap-2 items-center">
+                    {indexingStatus.status === 'scanning' && (
+                        <div className="bg-gray-800 text-blue-400 px-4 py-2 rounded-lg border border-blue-900/50 flex items-center gap-2">
+                            <svg className="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span className="text-sm font-mono">
+                                Scanning: {indexingStatus.current}/{indexingStatus.total || '?'}
+                            </span>
+                        </div>
+                    )}
+                    <button
+                        onClick={triggerLoad}
+                        disabled={indexingStatus.status === 'scanning'}
+                        className={`px-4 py-2 text-white rounded-lg transition-colors ${indexingStatus.status === 'scanning' ? 'bg-gray-600 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    >
+                        {indexingStatus.status === 'scanning' ? 'Scanning...' : 'Reload Index'}
+                    </button>
+
+                    <button
+                        onClick={fetchFiles}
+                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                    >
+                        Refresh List
+                    </button>
+                </div>
             </div>
 
             {/* Filters Section */}
@@ -88,6 +155,22 @@ function Files() {
                         <option value="all">All</option>
                         <option value="yes">YES</option>
                         <option value="no">NO</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-xs text-gray-400 mb-1">Status (Risk)</label>
+                    <select
+                        value={filterStatus}
+                        onChange={(e) => setFilterStatus(e.target.value)}
+                        className="bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-lg block w-32 p-2.5"
+                    >
+                        <option value="All">All Levels</option>
+                        <option value="CRITICAL">CRITICAL</option>
+                        <option value="HIGH">HIGH</option>
+                        <option value="MEDIUM">MEDIUM</option>
+                        <option value="LOW">LOW</option>
+                        <option value="UNKNOWN">UNKNOWN</option>
                     </select>
                 </div>
 
@@ -127,7 +210,7 @@ function Files() {
                 </div>
             </div>
 
-            {loading && <div className="text-gray-400">Chargement des données...</div>}
+            {loading && <div className="text-gray-400">Loading data...</div>}
             {error && <div className="text-red-400">{error}</div>}
 
             {!loading && !error && (
@@ -136,18 +219,35 @@ function Files() {
                         <table className="w-full text-left text-sm text-gray-400">
                             <thead className="bg-gray-900 text-gray-200 uppercase font-medium">
                                 <tr>
+                                    <th className="px-6 py-4 text-center">Risk</th>
+                                    <th className="px-6 py-4 text-center">Score</th>
                                     <th className="px-6 py-4 text-center">Text Found</th>
                                     <th className="px-6 py-4">Filename</th>
                                     <th className="px-6 py-4">True Type</th>
                                     <th className="px-6 py-4">Path</th>
                                     <th className="px-6 py-4">Size</th>
-                                    <th className="px-6 py-4">Info</th>
                                     <th className="px-6 py-4">Created At</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-700">
                                 {filteredFiles.map((file, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-700/50 transition-colors">
+                                    <tr
+                                        key={idx}
+                                        onClick={() => handleRowClick(file)}
+                                        className={`hover:bg-gray-700/50 transition-colors cursor-pointer ${selectedFile?.path === file.path ? 'bg-gray-700 border-l-4 border-blue-500' : ''}`}
+                                    >
+                                        <td className="px-6 py-4 text-center">
+                                            <span className={`px-2 py-1 rounded text-xs font-bold ${file.risk_level === 'CRITICAL' ? 'bg-red-600 text-white' :
+                                                file.risk_level === 'HIGH' ? 'bg-orange-500 text-white' :
+                                                    file.risk_level === 'MEDIUM' ? 'bg-yellow-500 text-black' :
+                                                        file.risk_level === 'LOW' ? 'bg-green-500 text-white' : 'bg-gray-600'
+                                                }`}>
+                                                {file.risk_level || 'UNKNOWN'}
+                                            </span>
+                                        </td>
+                                        <td className="px-6 py-4 text-center font-mono text-gray-300">
+                                            {file.risk_score ? file.risk_score.toFixed(1) : '0.0'}
+                                        </td>
                                         <td className="px-6 py-4 text-center">
                                             <span
                                                 className={`px-2 py-1 rounded text-xs font-bold ${file.has_text
@@ -159,17 +259,16 @@ function Files() {
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 font-medium text-gray-200">{file.filename}</td>
-                                        <td className="px-6 py-4">{file.type}</td>
+                                        <td className="px-6 py-4">{file.true_type || file.type}</td>
                                         <td className="px-6 py-4 font-mono text-xs">{file.path}</td>
                                         <td className="px-6 py-4">{formatSize(file.size)}</td>
-                                        <td className="px-6 py-4 text-xs text-gray-400 font-mono">{file.info || '-'}</td>
                                         <td className="px-6 py-4">{formatDate(file.created_at)}</td>
                                     </tr>
                                 ))}
                                 {filteredFiles.length === 0 && (
                                     <tr>
-                                        <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
-                                            Aucun fichier ne correspond aux critères (ou aucun indexé).
+                                        <td colSpan="9" className="px-6 py-8 text-center text-gray-500">
+                                            No files match criteria (or none indexed).
                                         </td>
                                     </tr>
                                 )}

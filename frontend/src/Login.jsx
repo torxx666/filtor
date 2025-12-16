@@ -15,7 +15,7 @@ function Login({ setLoggedIn }) {
     if (username !== 'demo' || password !== 'demo') {
       // Simulate validation delay for realism
       await new Promise(r => setTimeout(r, 500));
-      setError('Identifiants incorrects (Essayez demo / demo)');
+      setError('Invalid credentials (Try demo / demo)');
       setLoading(false);
       return;
     }
@@ -27,7 +27,7 @@ function Login({ setLoggedIn }) {
       setLoggedIn(true);
     } catch (err) {
       console.error(err);
-      setError('Erreur de connexion au serveur');
+      setError('Server connection error');
     } finally {
       setLoading(false);
     }

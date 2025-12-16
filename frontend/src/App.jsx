@@ -8,7 +8,7 @@ import Login from './Login';
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
-  const [mode, setMode] = useState('default');
+
 
   if (!loggedIn) {
     return <Login setLoggedIn={setLoggedIn} />;
@@ -19,8 +19,8 @@ function App() {
       <Layout onLogout={() => setLoggedIn(false)}>
         <Routes>
           <Route path="/" element={<Navigate to="/search" replace />} />
-          <Route path="/search" element={<Search mode={mode} />} />
-          <Route path="/settings" element={<UploadSettings mode={mode} setMode={setMode} />} />
+          <Route path="/search" element={<Search />} />
+          <Route path="/settings" element={<UploadSettings />} />
           <Route path="/stats" element={<Files />} />
           <Route path="*" element={<Navigate to="/search" replace />} />
         </Routes>
