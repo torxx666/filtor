@@ -113,7 +113,9 @@ function Files() {
                 />
             )}
             <div className="flex justify-between items-center">
-                <h1 className="text-3xl font-bold text-gray-100">File Statistics</h1>
+                <h1 className="text-3xl font-bold text-gray-100">
+                    File Statistics <span className="text-lg font-normal text-gray-400">({files.length})</span>
+                </h1>
                 <div className="flex gap-2 items-center">
                     {indexingStatus.status === 'scanning' && (
                         <div className="bg-gray-800 text-blue-400 px-4 py-2 rounded-lg border border-blue-900/50 flex items-center gap-2">

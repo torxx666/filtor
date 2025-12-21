@@ -18,8 +18,37 @@ const Sidebar = ({ file, onClose }) => {
             risk_level === 'HIGH' ? 'bg-orange-500' :
                 risk_level === 'MEDIUM' ? 'bg-yellow-500' : 'bg-green-500';
 
+    const RecursiveValue = ({ value, depth = 0 }) => {
+        if (depth > 3) return <span className="text-gray-500 italic">... too deep</span>;
+
+        if (value === null) return <span className="text-gray-500 italic">null</span>;
+        if (typeof value !== 'object') {
+            return (
+                <span className="text-gray-300 truncate inline-block max-w-full" title={String(value)}>
+                    {String(value)}
+                </span>
+            );
+        }
+
+        return (
+            <div className={`space-y-1 ${depth > 0 ? 'pl-3 border-l border-gray-800' : ''}`}>
+                {Object.entries(value).slice(0, 50).map(([k, v]) => (
+                    <div key={k} className="flex flex-col">
+                        <span className="text-gray-600 shrink-0 text-[10px] uppercase font-bold">{k.replace('_', ' ')}:</span>
+                        <div className="overflow-hidden">
+                            <RecursiveValue value={v} depth={depth + 1} />
+                        </div>
+                    </div>
+                ))}
+                {Object.keys(value).length > 50 && (
+                    <div className="text-gray-600 italic text-[10px]">... and {Object.keys(value).length - 50} more</div>
+                )}
+            </div>
+        );
+    };
+
     return createPortal(
-        <div className="fixed inset-y-0 right-0 w-96 bg-gray-900 border-l border-gray-700 shadow-2xl transform transition-transform duration-300 ease-in-out overflow-y-auto z-[9999] p-6">
+        <div className="fixed inset-y-0 right-0 w-96 bg-gray-900 border-l border-gray-700 shadow-2xl transform transition-transform duration-300 ease-in-out overflow-y-auto z-[9999] p-6 focus-within:z-[10000]">
             <div className="flex justify-between items-start mb-6">
                 <h2 className="text-xl font-bold text-gray-100 truncate w-64" title={file.filename}>
                     {file.filename}
@@ -121,21 +150,26 @@ const Sidebar = ({ file, onClose }) => {
                 </div>
             </div>
 
+            {/* NEW: Binary Scan Strings */}
+            {metadata && metadata.embedded_strings && metadata.embedded_strings.length > 0 && (
+                <div className="mb-6">
+                    <h3 className="text-sm uppercase text-gray-400 font-bold mb-3">Binary Scan Strings</h3>
+                    <div className="bg-gray-800 rounded p-4 text-[10px] font-mono border border-gray-700 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600">
+                        {metadata.embedded_strings.map((str, idx) => (
+                            <div key={idx} className="text-gray-300 py-1 border-b border-gray-700/50 last:border-0 hover:text-white break-all select-all">
+                                {str}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Metadata */}
             {metadata && (
                 <div className="mb-6">
-                    <h3 className="text-sm uppercase text-gray-400 font-bold mb-3">System Metadata</h3>
-                    <div className="bg-gray-800 rounded p-4 text-xs font-mono text-gray-400 space-y-1 border border-gray-700">
-                        {Object.entries(metadata).map(([k, v]) => (
-                            <div key={k} className="flex justify-between" title={k === 'hash' ? String(v) : ''}>
-                                <span className="text-gray-500 capitalize">{k.replace('_', ' ')}:</span>
-                                <span className="text-gray-300 text-right truncate ml-4">
-                                    {k === 'hash' && String(v).length > 20
-                                        ? `${String(v).substring(0, 8)}...${String(v).substring(String(v).length - 8)}`
-                                        : String(v)}
-                                </span>
-                            </div>
-                        ))}
+                    <h3 className="text-sm uppercase text-gray-400 font-bold mb-3">Detailed Metadata</h3>
+                    <div className="bg-gray-800 rounded p-4 text-[10px] font-mono border border-gray-700 overflow-x-hidden">
+                        <RecursiveValue value={metadata} />
                     </div>
                 </div>
             )}

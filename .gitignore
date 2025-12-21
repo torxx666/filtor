@@ -1,2 +1,4 @@
 incoming
-
+*.pyc
+backend/leak.db
+backend/backend.log

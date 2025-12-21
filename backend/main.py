@@ -1,24 +1,39 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Request
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import shutil
 import os
+import json
 import threading
 from loguru import logger
 
 # Import from new modules
 from database import init_db, get_db_connection
-from indexing import process_indexing, indexing_state
+from indexing import process_indexing, indexing_state, detect_file_changes
+
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 # Configure loguru
 logger.add("backend.log", rotation="10 MB")
 
+
+
 app = FastAPI()
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation Error: {exc.errors()} - Body: {await request.body()}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": str(exc.body)},
+    )
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Must specify exact origin when using credentials
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Must specify exact origin when using credentials
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,18 +50,33 @@ init_db()
 def read_root():
     return {"message": "Filtor Pro Backend API"}
 
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 @app.post("/login")
-async def login(background_tasks: BackgroundTasks):
+async def login(credentials: LoginRequest, background_tasks: BackgroundTasks):
     # Simple demo auth
-    logger.info("Login successful")
+    if not (
+        (credentials.username == "admin" and credentials.password == "GrosRelou22!!") or
+        (credentials.username == "demo" and credentials.password == "demo")
+    ):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    logger.info(f"Login successful for user: {credentials.username}")
     
     # Auto-scan trigger (Request #3)
     AUTO_SCAN_ON_LOGIN = True
     
     if AUTO_SCAN_ON_LOGIN:
         if indexing_state["status"] == "idle":
-            logger.info("Auto-scan: Triggering background indexing...")
-            background_tasks.add_task(process_indexing, UPLOAD_DIR)
+            # Check for changes before triggering
+            if detect_file_changes(UPLOAD_DIR):
+                logger.info("Auto-scan: Changes detected (or DB empty), triggering indexing...")
+                background_tasks.add_task(process_indexing, UPLOAD_DIR, mode="FAST")
+            else:
+                logger.info("Auto-scan: No file changes detected, skipping scan.")
         else:
             logger.info("Auto-scan: Indexing already in progress, skipping trigger")
             
@@ -60,14 +90,14 @@ async def upload_file(file: UploadFile = File(...)):
     return {"info": f"file '{file.filename}' saved at '{file_location}'"}
 
 @app.post("/load")
-async def load(background_tasks: BackgroundTasks):
+async def load(background_tasks: BackgroundTasks, mode: str = "DEEP"):
     if indexing_state["status"] == "scanning":
         logger.warning("Scan already in progress")
         return JSONResponse(status_code=400, content={"detail": "Scan already in progress"})
     
     # Start background task
-    logger.info(f"Starting background indexing for {UPLOAD_DIR}")
-    background_tasks.add_task(process_indexing, UPLOAD_DIR)
+    logger.info(f"Starting background indexing ({mode}) for {UPLOAD_DIR}")
+    background_tasks.add_task(process_indexing, UPLOAD_DIR, mode=mode)
     
     return {"status": "started", "message": "Indexing started in background"}
 
@@ -130,7 +160,7 @@ def search_files(q: str, mode: str = "default"):
         pattern = re.compile(q, re.IGNORECASE)
         
         results = c.execute("""
-            SELECT DISTINCT f.*, d.content FROM files f
+            SELECT DISTINCT f.*, d.content AS doc_content, d.src FROM files f
             LEFT JOIN docs d ON d.file_id = f.id
         """).fetchall()
         
@@ -138,45 +168,54 @@ def search_files(q: str, mode: str = "default"):
         response = []
         for row in results:
             file_dict = dict(row)
-            content = file_dict.pop('content', None)
-            filename = file_dict.get('filename', '')
-            path = file_dict.get('path', '')
+            content = file_dict.pop('doc_content', None)
+            src = file_dict.pop('src', 'content') # Default to 'content' if missing
+            file_dict['src'] = src
+            
+            # Special handling for metadata
+            if src == 'metadata' and content:
+                try:
+                    file_dict['metadata'] = json.loads(content)
+                    logger.debug(f"Metadata loaded for {file_dict.get('filename')}")
+                except Exception as e:
+                    logger.error(f"Failed to parse metadata JSON: {e}")
+                    file_dict['metadata'] = None
             
             # Check for matches in content, filename, or path
             match_found = False
             snippet = None
             
             # 1. Check filename/path
-            if pattern.search(filename) or pattern.search(path):
+            if pattern.search(file_dict.get('filename', '')) or pattern.search(file_dict.get('path', '')):
                 match_found = True
             
             # 2. Check content
             if content:
+                # For metadata, search in the raw JSON string
                 matches = list(pattern.finditer(content))
                 if matches:
                     match_found = True
-                    # Get first match for snippet
-                    match = matches[0]
-                    matched_text = match.group(0)
-                    pos = match.start()
                     
-                    # Extract snippet around match
-                    start = max(0, pos - 100)
-                    end = min(len(content), pos + len(matched_text) + 100)
-                    snippet = content[start:end]
+                    if src != 'metadata':
+                        # Get first match for snippet
+                        match = matches[0]
+                        matched_text = match.group(0)
+                        pos = match.start()
+                        
+                        # Extract snippet around match
+                        start = max(0, pos - 100)
+                        end = min(len(content), pos + len(matched_text) + 100)
+                        snippet = content[start:end]
+                        
+                        # Highlight the match in the snippet (relative position)
+                        relative_pos = pos - start
+                        snippet = (
+                            snippet[:relative_pos] + 
+                            f"<mark>{snippet[relative_pos:relative_pos + len(matched_text)]}</mark>" + 
+                            snippet[relative_pos + len(matched_text):]
+                        ).strip()
                     
-                    # Highlight the match in the snippet (relative position)
-                    relative_pos = pos - start
-                    snippet = (
-                        snippet[:relative_pos] + 
-                        f"<mark>{snippet[relative_pos:relative_pos + len(matched_text)]}</mark>" + 
-                        snippet[relative_pos + len(matched_text):]
-                    ).strip()
-                    
-                    if start > 0:
-                        snippet = "..." + snippet
-                    if end < len(content):
-                        snippet = snippet + "..."
+                    # removed ellipsis per user request
                     
                     file_dict['match_count'] = len(matches)
             
@@ -190,7 +229,7 @@ def search_files(q: str, mode: str = "default"):
     else:
         # Normal LIKE search
         results = c.execute("""
-            SELECT DISTINCT f.*, d.content FROM files f
+            SELECT DISTINCT f.*, d.content AS doc_content, d.src FROM files f
             LEFT JOIN docs d ON d.file_id = f.id
             WHERE d.content LIKE ? OR f.filename LIKE ? OR f.path LIKE ?
             ORDER BY f.risk_score DESC
@@ -200,32 +239,45 @@ def search_files(q: str, mode: str = "default"):
         response = []
         for row in results:
             file_dict = dict(row)
-            content = file_dict.pop('content', None)
+            content = file_dict.pop('doc_content', None)
+            src = file_dict.pop('src', 'content') # Default to 'content' if missing
+            file_dict['src'] = src
             
+            if src == 'metadata' and content:
+                logger.debug("Inside metadata block")
+                try:
+                    file_dict['metadata'] = json.loads(content)
+                    logger.debug("JSON parse success")
+                except Exception as e:
+                    logger.error(f"JSON parse error: {e}")
+                    file_dict['metadata'] = None
+
             # Extract snippet around the match
             if content and q.lower() in content.lower():
-                # Find position of query in content (case-insensitive)
-                pos = content.lower().find(q.lower())
-                # Extract 100 chars before and after
-                start = max(0, pos - 100)
-                end = min(len(content), pos + len(q) + 100)
-                snippet = content[start:end]
+                # For metadata, we still want to indicate a match, but maybe not show a snippet if we show the DB
+                if src == 'metadata':
+                     file_dict['snippet'] = None # UI will handle metadata display
+                else:
+                    # Find position of query in content (case-insensitive)
+                    pos = content.lower().find(q.lower())
+                    # Extract 100 chars before and after
+                    start = max(0, pos - 100)
+                    end = min(len(content), pos + len(q) + 100)
+                    snippet = content[start:end]
+                    
+                    # Highlight the match
+                    relative_pos = pos - start
+                    # Get the actual matched text with original case
+                    matched_text = content[pos:pos + len(q)]
+                    snippet = (
+                        snippet[:relative_pos] + 
+                        f"<mark>{matched_text}</mark>" + 
+                        snippet[relative_pos + len(q):]
+                    ).strip()
                 
-                # Highlight the match
-                relative_pos = pos - start
-                # Get the actual matched text with original case
-                matched_text = content[pos:pos + len(q)]
-                snippet = (
-                    snippet[:relative_pos] + 
-                    f"<mark>{matched_text}</mark>" + 
-                    snippet[relative_pos + len(q):]
-                ).strip()
-                
-                if start > 0:
-                    snippet = "..." + snippet
-                if end < len(content):
-                    snippet = snippet + "..."
-                file_dict['snippet'] = snippet
+                    # removed ellipsis per user request
+                    
+                    file_dict['snippet'] = snippet
             else:
                 file_dict['snippet'] = None
             

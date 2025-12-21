@@ -12,22 +12,19 @@ function Login({ setLoggedIn }) {
     setError('');
     setLoading(true);
 
-    if (username !== 'demo' || password !== 'demo') {
-      // Simulate validation delay for realism
-      await new Promise(r => setTimeout(r, 500));
-      setError('Invalid credentials (Try demo / demo)');
-      setLoading(false);
-      return;
-    }
-
     try {
-      await api.post('/login', {}, {
-        auth: { username, password }
+      await api.post('/login', {
+        username: username.trim(),
+        password: password.trim()
       });
       setLoggedIn(true);
     } catch (err) {
       console.error(err);
-      setError('Server connection error');
+      if (err.response && err.response.status === 401) {
+        setError('Invalid credentials (Try admin / GrosRelou22!!)');
+      } else {
+        setError('Server connection error');
+      }
     } finally {
       setLoading(false);
     }
@@ -87,7 +84,7 @@ function Login({ setLoggedIn }) {
         </form>
 
         <p className="mt-8 text-center text-gray-500 text-sm">
-          Demo Access: <span className="text-gray-400 font-mono">demo / demo</span>
+          Demo Access: <span className="text-gray-400 font-mono">admin / GrosRelou22!!</span>
         </p>
       </div>
     </div>

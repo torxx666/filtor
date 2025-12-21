@@ -1,9 +1,89 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 
+const MetadataViewer = ({ metadata }) => {
+  if (!metadata) return null;
+
+  const { format, first_frame_metadata } = metadata;
+  const streams = metadata.streams || [];
+
+  // Find Video/Audio streams
+  const videoStream = streams.find(s => s.codec_type === 'video');
+  const audioStream = streams.find(s => s.codec_type === 'audio');
+
+  return (
+    <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50 space-y-4">
+      <div className="flex gap-4 items-start">
+        {/* Basic Info */}
+        <div className="bg-gray-800 p-3 rounded-md flex-1">
+          <h4 className="text-xs text-gray-500 uppercase tracking-widest mb-2 border-b border-gray-700 pb-1">Format</h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div><span className="text-gray-400">Duration:</span> <span className="text-gray-200 font-mono">{format?.duration_seconds ? format.duration_seconds.toFixed(2) + 's' : 'N/A'}</span></div>
+            <div><span className="text-gray-400">Bitrate:</span> <span className="text-gray-200 font-mono">{format?.bit_rate ? (format.bit_rate / 1000).toFixed(0) + ' kbps' : 'N/A'}</span></div>
+            <div><span className="text-gray-400">Size:</span> <span className="text-gray-200 font-mono">{format?.size_bytes ? (format.size_bytes / 1024 / 1024).toFixed(2) + ' MB' : 'N/A'}</span></div>
+            <div><span className="text-gray-400">Container:</span> <span className="text-gray-200">{format?.format_name}</span></div>
+          </div>
+        </div>
+
+        {/* Video Stream */}
+        {videoStream && (
+          <div className="bg-gray-800 p-3 rounded-md flex-1">
+            <h4 className="text-xs text-blue-400 uppercase tracking-widest mb-2 border-b border-gray-700 pb-1">Video</h4>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div><span className="text-gray-400">Codec:</span> <span className="text-gray-200">{videoStream.codec_name}</span></div>
+              <div><span className="text-gray-400">Res:</span> <span className="text-gray-200 font-mono">{videoStream.width}x{videoStream.height}</span></div>
+              <div><span className="text-gray-400">FPS:</span> <span className="text-gray-200 font-mono">{videoStream.frame_rate}</span></div>
+              <div><span className="text-gray-400">Pix Fmt:</span> <span className="text-gray-200">{videoStream.pix_fmt}</span></div>
+            </div>
+          </div>
+        )}
+
+        {/* Audio Stream */}
+        {audioStream && (
+          <div className="bg-gray-800 p-3 rounded-md flex-1">
+            <h4 className="text-xs text-green-400 uppercase tracking-widest mb-2 border-b border-gray-700 pb-1">Audio</h4>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div><span className="text-gray-400">Codec:</span> <span className="text-gray-200">{audioStream.codec_name}</span></div>
+              <div><span className="text-gray-400">Channels:</span> <span className="text-gray-200">{audioStream.channels}</span></div>
+              <div><span className="text-gray-400">Rate:</span> <span className="text-gray-200 font-mono">{audioStream.sample_rate} Hz</span></div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Extra Metadata (Exif/First Frame) */}
+      {(first_frame_metadata && Object.keys(first_frame_metadata).length > 0) && (
+        <div className="bg-gray-800 p-3 rounded-md">
+          <h4 className="text-xs text-purple-400 uppercase tracking-widest mb-2 border-b border-gray-700 pb-1">Extended Metadata</h4>
+          <div className="grid grid-cols-3 gap-2 text-xs font-mono text-gray-300">
+            {Object.entries(first_frame_metadata).map(([k, v]) => (
+              <div key={k} className="truncate"><span className="text-gray-500">{k.split(':').pop()}:</span> {String(v)}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Binary Scan Strings */}
+      {metadata.embedded_strings && metadata.embedded_strings.length > 0 && (
+        <div className="bg-gray-800 p-3 rounded-md">
+          <h4 className="text-xs text-yellow-400 uppercase tracking-widest mb-2 border-b border-gray-700 pb-1">Binary Scan (Strings)</h4>
+          <div className="max-h-48 overflow-y-auto space-y-1 font-mono text-xs text-gray-300 scrollbar-thin scrollbar-thumb-gray-600">
+            {metadata.embedded_strings.map((str, idx) => (
+              <div key={idx} className="hover:bg-gray-700 p-1 rounded border-b border-gray-700/30 break-all select-all">
+                {str}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 function Search() {
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState('default');
+  const [scanMode, setScanMode] = useState('FAST');
   const [results, setResults] = useState([]);
   const [recent, setRecent] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -21,6 +101,16 @@ function Search() {
     const interval = setInterval(poll, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  const triggerRescan = async () => {
+    try {
+      await axios.post('http://localhost:8000/load', null, { params: { mode: scanMode } });
+      // Notification of start is handled by polling the status
+    } catch (e) {
+      console.error('Failed to trigger scan', e);
+      alert('Error: ' + (e.response?.data?.detail || e.message));
+    }
+  };
 
   useEffect(() => {
     axios.get('http://localhost:8000/recent', { params: { mode } }).then(r => setRecent(r.data));
@@ -79,11 +169,11 @@ function Search() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-6">
         <div className="flex items-center gap-6">
           <h1 className="text-3xl font-bold text-gray-100">Search</h1>
 
-          {/* Indexing Status Indicator (Loupiote) */}
+          {/* Indexing Status Indicator */}
           <div className="flex items-center gap-3 bg-gray-800 px-4 py-2 rounded-full border border-gray-600 shadow-sm">
             <div className={`w-3 h-3 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.5)] ${getStatusColor()}`}></div>
             <div className="flex flex-col">
@@ -92,60 +182,107 @@ function Search() {
               </span>
               {idxStatus.status === 'scanning' && (
                 <span className="text-[10px] text-gray-500 font-mono leading-none mt-1">
-                  {Math.round((idxStatus.current / idxStatus.total) * 100)}%
+                  {Math.round((idxStatus.current / (idxStatus.total || 1)) * 100)}%
                 </span>
               )}
             </div>
           </div>
         </div>
 
-        {/* Configuration moved here */}
-        <div className="flex items-center gap-2 mb-2">
-          <label className="text-gray-400 text-sm">Mode:</label>
-          <select
-            value={mode}
-            onChange={e => setMode(e.target.value)}
-            className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            <option value="default">Standard (Phrase)</option>
-            <option value="regex">Regex (Advanced)</option>
-            <option value="deep">Deep Search (Substring)</option>
-          </select>
-        </div>
+        {/* Configuration Area - Much more prominent */}
+        <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 shadow-2xl backdrop-blur-md space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
 
-        {/* Search Bar */}
-        <div className="relative">
-          <input
-            type="text"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={`Search keywords...`}
-            className="w-full bg-gray-800 border border-gray-700 text-gray-100 p-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
-          />
-          <button
-            onClick={() => performSearch(query)}
-            className="absolute right-2 top-2 bottom-2 px-6 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-          >
-            Search
-          </button>
-        </div>
+            {/* Search Mode (Standard/Regex) */}
+            <div className="flex flex-col gap-2">
+              <label className="text-blue-400 text-[10px] font-black uppercase tracking-widest">Search Algorithm</label>
+              <select
+                value={mode}
+                onChange={e => setMode(e.target.value)}
+                className="bg-gray-900 border border-gray-700 text-gray-100 text-sm rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-blue-500 transition-all outline-none"
+              >
+                <option value="default">Standard (Phrase Matching)</option>
+                <option value="regex">Regex (Advanced Patterns)</option>
+                <option value="deep">Deep Search (Substring Scan)</option>
+              </select>
+            </div>
 
-        {/* Quick Filters */}
-        <div className="flex gap-3">
-          <button onClick={() => applyQuickFilter('email')} className="px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 hover:border-blue-500/50 transition-all text-sm font-medium text-gray-300">
-            All Email
-          </button>
-          <button onClick={() => applyQuickFilter('ip')} className="px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 hover:border-blue-500/50 transition-all text-sm font-medium text-gray-300">
-            All IP
-          </button>
-          <button onClick={() => applyQuickFilter('url')} className="px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 hover:border-blue-500/50 transition-all text-sm font-medium text-gray-300">
-            All Urls
-          </button>
+            {/* Scan Depth (Fast/Deep) */}
+            <div className="flex flex-col gap-2">
+              <label className="text-red-400 text-[10px] font-black uppercase tracking-widest">Analysis Depth (Fast/Forensic)</label>
+              <div className="flex bg-gray-900 p-1 rounded-xl border border-gray-700">
+                <button
+                  onClick={() => setScanMode('FAST')}
+                  className={`flex-1 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scanMode === 'FAST' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-gray-500 hover:text-gray-300'}`}
+                >
+                  FAST
+                </button>
+                <button
+                  onClick={() => setScanMode('DEEP')}
+                  className={`flex-1 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scanMode === 'DEEP' ? 'bg-red-600 text-white shadow-lg shadow-red-900/40' : 'text-gray-500 hover:text-gray-300'}`}
+                >
+                  DEEP
+                </button>
+              </div>
+            </div>
+
+            {/* Launch Scan */}
+            <div className="flex flex-col gap-2">
+              <label className="text-green-400 text-[10px] font-black uppercase tracking-widest">
+                Global Indexing {idxStatus.status === 'scanning' ? `[${idxStatus.mode || '...'}]` : ''}
+              </label>
+              <button
+                onClick={triggerRescan}
+                disabled={idxStatus.status === 'scanning'}
+                className={`flex items-center justify-center gap-3 px-8 py-2.5 rounded-xl text-sm font-black tracking-tight transition-all border shadow-lg ${idxStatus.status === 'scanning'
+                  ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed'
+                  : 'bg-green-600 hover:bg-green-500 text-white border-green-400/30'
+                  }`}
+              >
+                <svg className={`w-4 h-4 ${idxStatus.status === 'scanning' ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {idxStatus.status === 'scanning' ? 'SCANNING...' : 'START SYSTEM SCAN'}
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4 pt-4 border-t border-gray-700/50">
+            {/* Search Bar */}
+            <div className="relative">
+              <input
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={`Search keywords...`}
+                className="w-full bg-gray-900 border border-gray-700 text-gray-100 p-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+              />
+              <button
+                onClick={() => performSearch(query)}
+                className="absolute right-2 top-2 bottom-2 px-6 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+              >
+                Search
+              </button>
+            </div>
+
+            {/* Quick Filters */}
+            <div className="flex gap-3">
+              <button onClick={() => applyQuickFilter('email')} className="px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg hover:bg-gray-800 hover:border-blue-500/50 transition-all text-sm font-medium text-gray-300">
+                All Email
+              </button>
+              <button onClick={() => applyQuickFilter('ip')} className="px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg hover:bg-gray-800 hover:border-blue-500/50 transition-all text-sm font-medium text-gray-300">
+                All IP
+              </button>
+              <button onClick={() => applyQuickFilter('url')} className="px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg hover:bg-gray-800 hover:border-blue-500/50 transition-all text-sm font-medium text-gray-300">
+                All Urls
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* ... keeping rest of results UI same ... */}
+      {/* Results Section */}
       <div className="flex justify-between items-center bg-gray-800/50 p-4 rounded-lg border border-gray-700">
         <span className="text-gray-400">Results: {results.length}</span>
         {results.length > 0 && (
@@ -157,14 +294,14 @@ function Search() {
 
       {loading && <div className="text-center py-8 text-gray-400">Searching...</div>}
 
-      <div className="space-y-4">
+      <div className="space-y-4 pb-20">
         {results.map((r, i) => (
           <div key={i} className="bg-gray-800 border border-gray-700 p-6 rounded-xl hover:border-gray-600 transition-all shadow-sm">
-            <div className="flex justify-between items-start mb-3">
-              <div>
-                <span className="text-gray-100 font-medium">{r.filename}</span>
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-3">
+                <span className="text-gray-100 font-bold text-lg">{r.filename}</span>
                 {r.risk_level && (
-                  <span className={`ml-3 px-2 py-1 rounded text-xs font-bold ${r.risk_level === 'CRITICAL' ? 'bg-red-600 text-white' :
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-black tracking-tighter shadow-md ${r.risk_level === 'CRITICAL' ? 'bg-red-600 text-white' :
                     r.risk_level === 'HIGH' ? 'bg-orange-500 text-white' :
                       r.risk_level === 'MEDIUM' ? 'bg-yellow-500 text-black' :
                         r.risk_level === 'LOW' ? 'bg-green-500 text-white' : 'bg-gray-600'
@@ -172,30 +309,42 @@ function Search() {
                     {r.risk_level}
                   </span>
                 )}
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-900/50 text-blue-300 border border-blue-800/50 uppercase tracking-widest">
+                  {r.src || 'content'}
+                </span>
               </div>
-              <span className="text-gray-500 text-sm font-mono">{r.path}</span>
+              <span className="text-gray-500 text-xs font-mono bg-gray-900 px-3 py-1 rounded-full border border-gray-700">{r.path}</span>
             </div>
-            {r.snippet && (
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50">
-                <div className="text-sm text-gray-300 font-mono break-words" dangerouslySetInnerHTML={{ __html: r.snippet }} />
+
+            {/* Snippet / Content */}
+            {r.highlight && (
+              <div className="bg-gray-900/80 p-4 rounded-xl border border-gray-700/50 mb-4 shadow-inner">
+                <div className="text-sm text-gray-300 font-mono break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: r.highlight }} />
               </div>
             )}
-            {/* Show match count if regex */}
+
+            {/* Metadata Viewer */}
+            {r.metadata && (
+              <MetadataViewer metadata={r.metadata} />
+            )}
+
             {r.match_count > 0 && (
-              <div className="mt-2 text-xs text-blue-400">Matches found: {r.match_count}</div>
+              <div className="mt-2 text-xs text-blue-400 font-bold uppercase tracking-widest">
+                Matches found: {r.match_count}
+              </div>
             )}
           </div>
         ))}
-      </div>
 
-      {recent.length > 0 && results.length === 0 && !loading && (
-        <div className="space-y-4 opacity-75">
-          <h2 className="text-xl font-semibold text-gray-400">Recent Searches</h2>
-          {recent.map((r, i) => (
-            <div key={i} className="bg-gray-800/50 border border-gray-700/50 p-4 rounded-lg" dangerouslySetInnerHTML={{ __html: r.highlight }} />
-          ))}
-        </div>
-      )}
+        {!loading && results.length === 0 && query && (
+          <div className="text-center py-20 bg-gray-800/20 rounded-2xl border-2 border-dashed border-gray-700/50 flex flex-col items-center gap-4">
+            <svg className="w-12 h-12 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <p className="text-gray-500 text-lg font-medium">No results found for <span className="text-gray-300 font-bold">"{query}"</span></p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

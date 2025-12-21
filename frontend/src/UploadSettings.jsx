@@ -6,12 +6,13 @@ import axios from 'axios';
 function UploadSettings() {
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
+  const [scanMode, setScanMode] = useState('FAST');
 
   const handleUpload = async () => {
     setProgress(20);
     setStatus('Indexing in progress...');
     try {
-      const res = await axios.post('http://localhost:8000/load');
+      const res = await axios.post('http://localhost:8000/load', null, { params: { mode: scanMode } });
       setProgress(100);
       setStatus(
         <span className="text-green-400">
@@ -83,45 +84,78 @@ function UploadSettings() {
       <h1 className="text-3xl font-bold text-gray-100">Settings & Upload</h1>
 
       {/* Upload Section */}
-      <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
-        <h2 className="text-xl font-semibold text-gray-300 mb-4">Data Indexing</h2>
-        <div
-          onDragEnter={handleDragEnter}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`border-2 border-dashed p-12 rounded-xl text-center cursor-pointer transition-all ${isDragging
-              ? 'border-blue-500 bg-blue-500/10 scale-[1.02]'
-              : 'border-gray-600 bg-gray-700/30 hover:border-gray-500 hover:bg-gray-700/50'
-            }`}
-        >
-          <div className="pointer-events-none">
-            <p className={`text-lg font-medium ${isDragging ? 'text-blue-400' : 'text-gray-400'}`}>
-              {isDragging ? 'Drop files here!' : 'Drag & drop ZIP/RAR/PDF files here'}
-            </p>
-            <p className="text-gray-500 text-sm mt-2">or click to browse</p>
-          </div>
-        </div>
+      <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl">
+        <h2 className="text-2xl font-black text-gray-100 mb-8 uppercase tracking-tighter italic">Data Indexing</h2>
 
-        <div className="mt-6 flex flex-col gap-4">
-          <button
-            onClick={handleUpload}
-            className="w-full py-4 bg-green-600 hover:bg-green-700 text-white text-lg font-bold rounded-xl transition-colors shadow-lg shadow-green-900/20"
+        <div className="flex flex-col gap-8">
+
+          <div
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`border-2 border-dashed p-16 rounded-2xl text-center cursor-pointer transition-all ${isDragging
+              ? 'border-blue-500 bg-blue-500/10 scale-[1.01]'
+              : 'border-gray-700 bg-gray-900/40 hover:border-gray-500 hover:bg-gray-900/60'
+              }`}
           >
-            Load & Index All Data
-          </button>
+            <div className="pointer-events-none space-y-4">
+              <div className="flex justify-center">
+                <svg className="w-12 h-12 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </div>
+              <div>
+                <p className={`text-xl font-bold ${isDragging ? 'text-blue-400' : 'text-gray-300'}`}>
+                  {isDragging ? 'Release to upload!' : 'Drop Forensic Data Here'}
+                </p>
+                <p className="text-gray-500 text-sm mt-1">Accepts ZIP, RAR, PDF, Videos, Images</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between bg-gray-900/50 p-4 rounded-xl border-2 border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.15)] animate-pulse-slow">
+              <span className="text-white font-black uppercase tracking-widest text-sm flex items-center gap-2">
+                <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                Select Analysis Mode:
+              </span>
+              <div className="flex bg-gray-950 p-1.5 rounded-lg border border-gray-600">
+                <button
+                  onClick={() => setScanMode('FAST')}
+                  className={`px-6 py-2 rounded-md transition-all text-sm font-black uppercase tracking-widest ${scanMode === 'FAST' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-200'}`}
+                >
+                  FAST
+                </button>
+                <button
+                  onClick={() => setScanMode('DEEP')}
+                  className={`px-6 py-2 rounded-md transition-all text-sm font-black uppercase tracking-widest ${scanMode === 'DEEP' ? 'bg-red-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-200'}`}
+                >
+                  DEEP
+                </button>
+              </div>
+            </div>
+
+            <button
+              onClick={handleUpload}
+              className={`w-full py-5 text-white text-xl font-black uppercase tracking-tighter rounded-2xl transition-all shadow-2xl bg-green-600 hover:bg-green-500 border-b-4 border-green-800 active:border-b-0 active:translate-y-1`}
+            >
+              Load & index All Data ({scanMode})
+            </button>
+          </div>
 
           {progress > 0 && (
-            <div className="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+            <div className="w-full bg-gray-900 rounded-full h-4 overflow-hidden border border-gray-700">
               <div
-                className="bg-green-500 h-full transition-all duration-500 ease-out"
+                className={`h-full transition-all duration-500 ease-out ${scanMode === 'FAST' ? 'bg-blue-500' : 'bg-red-500'}`}
                 style={{ width: `${progress}%` }}
               ></div>
             </div>
           )}
 
           {status && (
-            <div className="p-4 bg-gray-900 rounded-lg border border-gray-700 font-mono text-sm">
+            <div className="p-4 bg-gray-900 rounded-xl border border-gray-700 font-mono text-sm shadow-inner leading-relaxed">
+              <div className="text-xs text-gray-500 mb-1">Engine Status [Mode: {scanMode}]</div>
               {status}
             </div>
           )}
@@ -197,3 +231,4 @@ function UploadSettings() {
 }
 
 export default UploadSettings;
+// Force refresh

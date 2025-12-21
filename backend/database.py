@@ -21,6 +21,7 @@ def init_db():
             filename TEXT,
             path TEXT,
             size INTEGER,
+            mtime REAL,
             type TEXT,
             created_at TEXT,
             true_type TEXT,
@@ -32,15 +33,35 @@ def init_db():
         )
     ''')
     
+    # Simple migration to add mtime if it doesn't exist
+    try:
+        c.execute('ALTER TABLE files ADD COLUMN mtime REAL')
+    except sqlite3.OperationalError:
+        # Column likely already exists
+        pass
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS docs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_id INTEGER,
             content TEXT,
+            src TEXT,
             page_num INTEGER,
             FOREIGN KEY(file_id) REFERENCES files(id)
         )
     ''')
+    
+    # Simple migration to add src if it doesn't exist
+    try:
+        c.execute('ALTER TABLE docs ADD COLUMN src TEXT')
+    except sqlite3.OperationalError:
+        pass
+        
+    # Simple migration to add scan_mode if it doesn't exist
+    try:
+        c.execute('ALTER TABLE files ADD COLUMN scan_mode TEXT')
+    except sqlite3.OperationalError:
+        pass
     
     # FTS5 virtual table for full-text search
     c.execute('''

@@ -1,0 +1,7 @@
+__pycache__/
+*.db
+*.log
+incoming/
+tests/
+.env
+.git/
