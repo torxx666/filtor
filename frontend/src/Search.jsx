@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from './api';
+import Sidebar from './components/Sidebar';
 
 const MetadataViewer = ({ metadata }) => {
   if (!metadata) return null;
@@ -83,17 +84,17 @@ const MetadataViewer = ({ metadata }) => {
 function Search() {
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState('default');
-  const [scanMode, setScanMode] = useState('FAST');
   const [results, setResults] = useState([]);
   const [recent, setRecent] = useState([]);
   const [loading, setLoading] = useState(false);
   const [idxStatus, setIdxStatus] = useState({ status: 'idle', total: 0, current: 0, message: '' });
+  const [selectedFile, setSelectedFile] = useState(null);
 
   // Poll for indexing status
   useEffect(() => {
     const poll = async () => {
       try {
-        const r = await axios.get('http://localhost:8000/status');
+        const r = await api.get('/status');
         setIdxStatus(r.data);
       } catch (e) { console.error('Status poll error', e); }
     };
@@ -102,18 +103,8 @@ function Search() {
     return () => clearInterval(interval);
   }, []);
 
-  const triggerRescan = async () => {
-    try {
-      await axios.post('http://localhost:8000/load', null, { params: { mode: scanMode } });
-      // Notification of start is handled by polling the status
-    } catch (e) {
-      console.error('Failed to trigger scan', e);
-      alert('Error: ' + (e.response?.data?.detail || e.message));
-    }
-  };
-
   useEffect(() => {
-    axios.get('http://localhost:8000/recent', { params: { mode } }).then(r => setRecent(r.data));
+    api.get('/recent', { params: { mode } }).then(r => setRecent(r.data));
   }, [mode]);
 
   const performSearch = async (searchQuery, overrideMode = null) => {
@@ -121,7 +112,7 @@ function Search() {
     setLoading(true);
     const searchMode = overrideMode || mode;
     try {
-      const r = await axios.get('http://localhost:8000/search', { params: { q: searchQuery, mode: searchMode } });
+      const r = await api.get('/search', { params: { q: searchQuery, mode: searchMode } });
       setResults(r.data);
     } catch (e) {
       console.error(e);
@@ -145,7 +136,7 @@ function Search() {
       default: return;
     }
     setQuery(newQuery);
-    setMode(newMode); // Auto-switch mode
+    setMode(newMode);
     performSearch(newQuery, newMode);
   };
 
@@ -189,62 +180,21 @@ function Search() {
           </div>
         </div>
 
-        {/* Configuration Area - Much more prominent */}
+        {/* Configuration Area */}
         <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 shadow-2xl backdrop-blur-md space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
 
-            {/* Search Mode (Standard/Regex) */}
-            <div className="flex flex-col gap-2">
-              <label className="text-blue-400 text-[10px] font-black uppercase tracking-widest">Search Algorithm</label>
-              <select
-                value={mode}
-                onChange={e => setMode(e.target.value)}
-                className="bg-gray-900 border border-gray-700 text-gray-100 text-sm rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-blue-500 transition-all outline-none"
-              >
-                <option value="default">Standard (Phrase Matching)</option>
-                <option value="regex">Regex (Advanced Patterns)</option>
-                <option value="deep">Deep Search (Substring Scan)</option>
-              </select>
-            </div>
-
-            {/* Scan Depth (Fast/Deep) */}
-            <div className="flex flex-col gap-2">
-              <label className="text-red-400 text-[10px] font-black uppercase tracking-widest">Analysis Depth (Fast/Forensic)</label>
-              <div className="flex bg-gray-900 p-1 rounded-xl border border-gray-700">
-                <button
-                  onClick={() => setScanMode('FAST')}
-                  className={`flex-1 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scanMode === 'FAST' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-gray-500 hover:text-gray-300'}`}
-                >
-                  FAST
-                </button>
-                <button
-                  onClick={() => setScanMode('DEEP')}
-                  className={`flex-1 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scanMode === 'DEEP' ? 'bg-red-600 text-white shadow-lg shadow-red-900/40' : 'text-gray-500 hover:text-gray-300'}`}
-                >
-                  DEEP
-                </button>
-              </div>
-            </div>
-
-            {/* Launch Scan */}
-            <div className="flex flex-col gap-2">
-              <label className="text-green-400 text-[10px] font-black uppercase tracking-widest">
-                Global Indexing {idxStatus.status === 'scanning' ? `[${idxStatus.mode || '...'}]` : ''}
-              </label>
-              <button
-                onClick={triggerRescan}
-                disabled={idxStatus.status === 'scanning'}
-                className={`flex items-center justify-center gap-3 px-8 py-2.5 rounded-xl text-sm font-black tracking-tight transition-all border shadow-lg ${idxStatus.status === 'scanning'
-                  ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed'
-                  : 'bg-green-600 hover:bg-green-500 text-white border-green-400/30'
-                  }`}
-              >
-                <svg className={`w-4 h-4 ${idxStatus.status === 'scanning' ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                {idxStatus.status === 'scanning' ? 'SCANNING...' : 'START SYSTEM SCAN'}
-              </button>
-            </div>
+          {/* Search Mode (Standard/Regex) */}
+          <div className="flex flex-col gap-2 max-w-md">
+            <label className="text-blue-400 text-[10px] font-black uppercase tracking-widest">Search Algorithm</label>
+            <select
+              value={mode}
+              onChange={e => setMode(e.target.value)}
+              className="bg-gray-900 border border-gray-700 text-gray-100 text-sm rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-blue-500 transition-all outline-none"
+            >
+              <option value="default">Standard (Phrase Matching)</option>
+              <option value="regex">Regex (Advanced Patterns)</option>
+              <option value="deep">Deep Search (Substring Scan)</option>
+            </select>
           </div>
 
           <div className="space-y-4 pt-4 border-t border-gray-700/50">
@@ -296,10 +246,14 @@ function Search() {
 
       <div className="space-y-4 pb-20">
         {results.map((r, i) => (
-          <div key={i} className="bg-gray-800 border border-gray-700 p-6 rounded-xl hover:border-gray-600 transition-all shadow-sm">
+          <div
+            key={i}
+            className="bg-gray-800 border border-gray-700 p-6 rounded-xl hover:border-gray-500 transition-all shadow-sm cursor-pointer group"
+            onClick={() => setSelectedFile(r)}
+          >
             <div className="flex justify-between items-start mb-4">
               <div className="flex items-center gap-3">
-                <span className="text-gray-100 font-bold text-lg">{r.filename}</span>
+                <span className="text-gray-100 font-bold text-lg group-hover:text-blue-400 transition-colors">{r.filename}</span>
                 {r.risk_level && (
                   <span className={`px-2 py-0.5 rounded text-[10px] font-black tracking-tighter shadow-md ${r.risk_level === 'CRITICAL' ? 'bg-red-600 text-white' :
                     r.risk_level === 'HIGH' ? 'bg-orange-500 text-white' :
@@ -317,13 +271,13 @@ function Search() {
             </div>
 
             {/* Snippet / Content */}
-            {r.highlight && (
+            {r.snippet && (
               <div className="bg-gray-900/80 p-4 rounded-xl border border-gray-700/50 mb-4 shadow-inner">
-                <div className="text-sm text-gray-300 font-mono break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: r.highlight }} />
+                <div className="text-sm text-gray-300 font-mono break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: r.snippet }} />
               </div>
             )}
 
-            {/* Metadata Viewer */}
+            {/* Metadata Viewer (Inline preview) - Could remove if Sidebar covers it, but keeping for quick glance */}
             {r.metadata && (
               <MetadataViewer metadata={r.metadata} />
             )}
@@ -333,6 +287,10 @@ function Search() {
                 Matches found: {r.match_count}
               </div>
             )}
+
+            <div className="mt-4 text-center text-xs text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity uppercase font-bold tracking-widest">
+              Click to view full details
+            </div>
           </div>
         ))}
 
@@ -345,6 +303,8 @@ function Search() {
           </div>
         )}
       </div>
+
+      <Sidebar file={selectedFile} onClose={() => setSelectedFile(null)} />
     </div>
   );
 }

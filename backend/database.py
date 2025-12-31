@@ -62,6 +62,20 @@ def init_db():
         c.execute('ALTER TABLE files ADD COLUMN scan_mode TEXT')
     except sqlite3.OperationalError:
         pass
+        
+    # Simple migration to add keywords_hash if it doesn't exist (for tracking keyword changes)
+    try:
+        c.execute('ALTER TABLE files ADD COLUMN keywords_hash TEXT')
+    except sqlite3.OperationalError:
+        pass
+
+    # Custom keywords table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS keywords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT UNIQUE
+        )
+    ''')
     
     # FTS5 virtual table for full-text search
     c.execute('''

@@ -2,3 +2,7 @@ incoming
 *.pyc
 backend/leak.db
 backend/backend.log
+leak.db
+backend/backend.*.log
+backend/__pycache__/
+Filtor.code-workspace

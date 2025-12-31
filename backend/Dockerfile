@@ -40,4 +40,4 @@ COPY . .
 # Remove database and logs if they were copied (best effort)
 RUN rm -f leak.db backend.log
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000"]

@@ -63,20 +63,7 @@ const Layout = ({ children, onLogout }) => {
                             <div className={`${isActive('/search') ? 'text-blue-400' : 'text-gray-400 group-hover:text-gray-100'}`}>
                                 <SearchIcon />
                             </div>
-                            <span className="hidden md:block">Search</span>
-                        </button>
-
-                        <button
-                            onClick={() => navigate('/settings')}
-                            className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 group ${isActive('/settings')
-                                ? 'bg-blue-600/10 text-blue-400 font-medium'
-                                : 'hover:bg-gray-700/50 text-gray-400 hover:text-gray-100'
-                                }`}
-                        >
-                            <div className={`${isActive('/settings') ? 'text-blue-400' : 'text-gray-400 group-hover:text-gray-100'}`}>
-                                <SettingsIcon />
-                            </div>
-                            <span className="hidden md:block">Settings</span>
+                            <span className="hidden md:block">Analysis</span>
                         </button>
 
                         <button
@@ -96,6 +83,19 @@ const Layout = ({ children, onLogout }) => {
                                 </svg>
                             </div>
                             <span className="hidden md:block">File Stats</span>
+                        </button>
+
+                        <button
+                            onClick={() => navigate('/settings')}
+                            className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 group ${isActive('/settings')
+                                ? 'bg-blue-600/10 text-blue-400 font-medium'
+                                : 'hover:bg-gray-700/50 text-gray-400 hover:text-gray-100'
+                                }`}
+                        >
+                            <div className={`${isActive('/settings') ? 'text-blue-400' : 'text-gray-400 group-hover:text-gray-100'}`}>
+                                <SettingsIcon />
+                            </div>
+                            <span className="hidden md:block">Settings</span>
                         </button>
                     </nav>
                 </div>

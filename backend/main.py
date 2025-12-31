@@ -33,7 +33,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Must specify exact origin when using credentials
+    allow_origins=["http://localhost:9001", "http://127.0.0.1:9001"],  # Must specify exact origin when using credentials
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,17 +106,22 @@ def get_status():
     return indexing_state
 
 @app.get("/files")
-def get_files(risk_level: str = None):
-    logger.info(f"Fetching files (risk_level={risk_level})")
+def get_files(risk_level: str = None, q: str = None):
+    logger.info(f"Fetching files (risk_level={risk_level}, q={q})")
     conn = get_db_connection()
     c = conn.cursor()
     
-    query = "SELECT * FROM files"
+    query = "SELECT * FROM files WHERE 1=1"
     params = []
     
     if risk_level and risk_level != "All":
-        query += " WHERE risk_level = ?"
+        query += " AND risk_level = ?"
         params.append(risk_level)
+        
+    if q:
+        # Case insensitive filtering
+        query += " AND filename LIKE ?"
+        params.append(f"%{q}%")
     
     # Order by risk score descending by default
     query += " ORDER BY risk_score DESC, id DESC"
@@ -287,11 +292,100 @@ def search_files(q: str, mode: str = "default"):
         logger.info(f"Found {len(response)} results")
         return response
 
+    return []
+    
 @app.get("/recent")
 def get_recent(mode: str = "default"):
-    # Return empty for now - could implement recent searches later
-    return []
+    # Return 10 most recently modified or created files
+    logger.info(f"Fetching recent files (mode={mode})")
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        # Fetch files ordered by id (proxy for insertion time) or modify date if available
+        # here we use id desc for simplicity
+        results = c.execute("SELECT * FROM files ORDER BY id DESC LIMIT 10").fetchall()
+        
+        response = []
+        for row in results:
+             file_dict = dict(row)
+             # Add empty snippets/mock data if needed to match search result structure if shared
+             file_dict['snippet'] = None 
+             file_dict['match_count'] = 0
+             response.append(file_dict)
+             
+        return response
+    except Exception as e:
+        logger.error(f"Error fetching recent files: {e}")
+        return []
+    finally:
+        conn.close()
+
+# Custom Keywords API
+class KeywordRequest(BaseModel):
+    keyword: str
+
+@app.get("/keywords")
+def get_keywords():
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        keywords = c.execute("SELECT * FROM keywords ORDER BY id DESC").fetchall()
+        return [dict(k) for k in keywords]
+    except Exception as e:
+        logger.error(f"Error fetching keywords: {e}")
+        return [] # Return empty if table doesn't exist yet (though init_db should handle it)
+    finally:
+        conn.close()
+
+@app.post("/keywords")
+def add_keyword(req: KeywordRequest, background_tasks: BackgroundTasks):
+    kw = req.keyword.strip()
+    if not kw:
+         raise HTTPException(status_code=400, detail="Keyword cannot be empty")
+         
+    if len(kw) < 5:
+         raise HTTPException(status_code=400, detail="Keyword must be at least 5 characters long")
+         
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO keywords (keyword) VALUES (?)", (kw,))
+        conn.commit()
+        
+        # Trigger re-scan if idle (to find this new keyword in existing files)
+        if indexing_state["status"] == "idle":
+            logger.info(f"New keyword '{kw}' added. Triggering auto-rescan.")
+            # Use FAST mode for quick feedback or DEEP if user prefers? 
+            # Logic in indexing.py handles hash changes to re-scan necessary files.
+            # Let's default to DEEP since we want to find secrets buried in files? 
+            # OR FAST which respects user preference if previously set?
+            # Use DEEP mode to ensure we don't abort on critical risk (FAST mode behavior)
+            # and to ensure thorough search for the new keyword
+            background_tasks.add_task(process_indexing, UPLOAD_DIR, mode="DEEP")
+            
+        return {"status": "ok", "id": c.lastrowid, "keyword": kw, "message": "Keyword added, scanning triggered."}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Keyword already exists")
+    except Exception as e:
+        logger.error(f"Error adding keyword: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.delete("/keywords/{keyword_id}")
+def delete_keyword(keyword_id: int):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM keywords WHERE id = ?", (keyword_id,))
+        conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Error deleting keyword: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=9000)

@@ -1,8 +1,8 @@
 #!/bin/bash
 docker compose up -d --build
 echo "Tout est up !"
-echo "Backend  → http://localhost:8000"
-echo "Frontend → http://localhost:3000"
+echo "Backend  → http://localhost:9000"
+echo "Frontend → http://localhost:9001"
 echo ""
 echo "Pour recharger après modif Python  → ./go.sh indexer"
 echo "Pour recharger après modif React   → ./go.sh frontend"

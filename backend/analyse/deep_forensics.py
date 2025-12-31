@@ -62,8 +62,9 @@ class DeepFileAnalyzer:
         '.vbs', '.js', '.jar', '.app', '.deb', '.rpm', '.msi', '.scr'
     }
    
-    def __init__(self):
+    def __init__(self, custom_keywords=None):
         self.analysis_cache = {}
+        self.custom_keywords = custom_keywords or []
        
     def analyze(self, filepath: str, depth: str = "DEEP") -> DeepAnalysisResult:
         """
@@ -796,20 +797,41 @@ class DeepFileAnalyzer:
             # Secrets (patterns sensibles)
             secret_patterns = {
                 'api_key': r'(?i)(api[_-]?key|apikey)["\s:=]+([a-zA-Z0-9\-_]{20,})',
-                'password': r'(?i)(password|passwd)["\s:=]+(\S+)',
-                'aws_key': r'(AKIA[0-9A-Z]{16})',
-                'private_key': r'-----BEGIN (?:RSA |EC )?PRIVATE KEY-----',
-                'jwt': r'eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*',
+                'password': r'(?i)(password|passwd|pwd)["\s:=]+(\S+)',
+                'token': r'(?i)(token|auth|bearer)["\s:=]+(\S+)',
+                'aws_key': r'AKIA[0-9A-Z]{16}',
+                'private_key': r'-----BEGIN [A-Z]+ PRIVATE KEY-----'
             }
-           
-            for secret_type, pattern in secret_patterns.items():
-                matches = re.findall(pattern, content)
-                if matches:
-                    analysis['secrets_found'].append({
-                        'type': secret_type,
-                        'count': len(matches),
-                        'sample': '[REDACTED]' if 'password' in secret_type or 'key' in secret_type else str(matches[0])[:30]
-                    })
+            
+            for stype, pattern in secret_patterns.items():
+                matches = re.finditer(pattern, content)
+                for m in matches:
+                    # Capturer la valeur (groupe 2 ou match complet)
+                    val = m.group(0)
+                    if m.lastindex and m.lastindex >= 2:
+                        val = m.group(2)
+                    elif m.lastindex and m.lastindex >= 1: # Cas AWS sans groupe 2
+                        val = m.group(0)
+                        
+                    # Truncate if too long to avoid clutter
+                    if len(val) > 50: val = val[:47] + "..."
+                    
+                    analysis['secrets_found'].append(f"{stype}: {val}")
+                    analysis['suspicious_patterns'].append(f"Secret detected: {stype}")
+            
+            # Remove duplicates
+            analysis['secrets_found'] = list(set(analysis['secrets_found']))
+            
+            # Custom Keywords (Internal Use)
+            for kw in self.custom_keywords:
+                # Simple substring match (case insensitive)
+                if re.search(r'(?i)' + re.escape(kw), content):
+                    count = len(re.findall(r'(?i)' + re.escape(kw), content))
+                    analysis['secrets_found'].append(f"Internal Use Kw: {kw}")
+                    analysis['risk_indicators'].append(f"Custom keyword found: {kw}")
+            
+            # Remove duplicates again after custom keywords
+            analysis['secrets_found'] = list(set(analysis['secrets_found']))
            
             # Patterns suspects
             suspicious = [
@@ -944,7 +966,11 @@ class DeepFileAnalyzer:
         sig_matches = result.file_signature.get('matches', [])
         if sig_matches and len(sig_matches) > 0:
             expected_type = sig_matches[0]
-            if ext and expected_type not in ext:
+            # Allow ZIP signature for Office Open XML formats
+            valid_zip_extensions = ['.pptx', '.docx', '.xlsx', '.jar', '.odt', '.ods', '.odp']
+            is_valid_zip = (expected_type == 'zip' and ext in valid_zip_extensions)
+            
+            if ext and expected_type not in ext and not is_valid_zip:
                 issues.append(f"⚠️ Signature ({expected_type}) does not match extension ({ext})")
        
         # Macros dans Office

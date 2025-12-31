@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import axios from 'axios';
+import { useState, useEffect } from 'react';
+import api from './api';
 
 
 
@@ -8,11 +8,48 @@ function UploadSettings() {
   const [progress, setProgress] = useState(0);
   const [scanMode, setScanMode] = useState('FAST');
 
+  // Custom Keywords State
+  const [keywords, setKeywords] = useState([]);
+  const [newKeyword, setNewKeyword] = useState('');
+
+  const fetchKeywords = async () => {
+    try {
+      const res = await api.get('/keywords');
+      setKeywords(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    fetchKeywords();
+  }, []);
+
+  const handleAddKeyword = async () => {
+    if (!newKeyword.trim()) return;
+    try {
+      await api.post('/keywords', { keyword: newKeyword });
+      setNewKeyword('');
+      fetchKeywords();
+    } catch (e) {
+      alert(e.response?.data?.detail || "Error adding keyword");
+    }
+  };
+
+  const handleDeleteKeyword = async (id) => {
+    try {
+      await api.delete(`/keywords/${id}`);
+      fetchKeywords();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleUpload = async () => {
     setProgress(20);
     setStatus('Indexing in progress...');
     try {
-      const res = await axios.post('http://localhost:8000/load', null, { params: { mode: scanMode } });
+      const res = await api.post('/load', null, { params: { mode: scanMode } });
       setProgress(100);
       setStatus(
         <span className="text-green-400">
@@ -66,7 +103,7 @@ function UploadSettings() {
       for (let i = 0; i < files.length; i++) {
         const formData = new FormData();
         formData.append('file', files[i]);
-        await axios.post('http://localhost:8000/upload', formData, {
+        await api.post('/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         setProgress(10 + ((i + 1) / files.length) * 40);
@@ -164,6 +201,54 @@ function UploadSettings() {
 
 
 
+      {/* Internal Use Keywords (Custom Alerts) */}
+      <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl">
+        <h2 className="text-2xl font-black text-gray-100 mb-6 uppercase tracking-tighter italic">Internal Use Keywords</h2>
+        <div className="flex flex-col gap-6">
+          {/* Add Keyword */}
+          <div className="flex gap-4">
+            <input
+              type="text"
+              value={newKeyword}
+              onChange={(e) => setNewKeyword(e.target.value)}
+              placeholder="Enter keyword (e.g., CONFIDENTIAL, ProjectX)..."
+              className="flex-1 bg-gray-900 border border-gray-600 rounded-xl px-4 py-3 text-gray-200 focus:outline-none focus:border-blue-500 transition-colors"
+              onKeyDown={(e) => e.key === 'Enter' && handleAddKeyword()}
+            />
+            <button
+              onClick={handleAddKeyword}
+              className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all shadow-lg"
+            >
+              ADD
+            </button>
+          </div>
+
+          {/* Keywords List */}
+          <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700 max-h-60 overflow-y-auto">
+            {keywords.length === 0 ? (
+              <p className="text-gray-500 text-center py-4 italic">No custom keywords defined.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {keywords.map((k) => (
+                  <div key={k.id} className="flex items-center gap-2 bg-gray-800 border border-gray-600 px-3 py-1.5 rounded-lg group">
+                    <span className="text-gray-200 font-mono text-sm">{k.keyword}</span>
+                    <button
+                      onClick={() => handleDeleteKeyword(k.id)}
+                      className="text-gray-500 hover:text-red-400 transition-colors"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-gray-500">
+            * These keywords will be flagged as <span className="text-yellow-500 font-bold">"Internal Use Kw"</span> secrets during file analysis.
+          </p>
+        </div>
+      </div>
+
       {/* Database Management Section */}
       <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
         <h2 className="text-xl font-semibold text-gray-300 mb-4">Database Management</h2>
@@ -174,7 +259,7 @@ function UploadSettings() {
             <h3 className="text-gray-200 font-medium mb-2">Export Database</h3>
             <p className="text-gray-400 text-sm mb-4">Download the current SQLite database (leak.db) to backup your data.</p>
             <button
-              onClick={() => window.location.href = 'http://localhost:8000/export-db'}
+              onClick={() => window.location.href = `${api.defaults.baseURL}/export-db`}
               className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium"
             >
               Export DB
@@ -205,7 +290,7 @@ function UploadSettings() {
 
                   setStatus('Importing database...');
                   try {
-                    await axios.post('http://localhost:8000/import-db', formData, {
+                    await api.post('/import-db', formData, {
                       headers: { 'Content-Type': 'multipart/form-data' }
                     });
                     setStatus(<span className="text-green-400">Database successfully imported and re-indexed!</span>);

@@ -2,7 +2,7 @@ import urllib.request
 import json
 
 try:
-    with urllib.request.urlopen("http://localhost:8000/search?q=mp4") as response:
+    with urllib.request.urlopen("http://localhost:9000/search?q=mp4") as response:
         data = json.load(response)
         print(json.dumps(data, indent=2))
 except Exception as e:

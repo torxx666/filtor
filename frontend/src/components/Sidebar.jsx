@@ -91,9 +91,9 @@ const Sidebar = ({ file, onClose }) => {
                     <h3 className="text-sm uppercase text-gray-400 font-bold mb-3">Detections</h3>
                     <div className="space-y-3">
                         {Object.entries(detections).map(([key, val]) => {
-                            // Filter out empty detections
-                            if (!val.risk_points && !val.indicators?.length && !val.findings) return null;
-                            if (val.indicators?.length === 0 && !val.findings) return null;
+                            // Filter out empty detections (EXCEPT hidden_content which user wants to see always)
+                            if (key !== 'hidden_content' && !val.risk_points && (!val.indicators || val.indicators.length === 0) && !val.findings) return null;
+                            if (key !== 'hidden_content' && val.indicators?.length === 0 && !val.findings) return null;
 
                             return (
                                 <div key={key} className="bg-gray-800 rounded p-3 text-sm border border-gray-700">
@@ -109,20 +109,58 @@ const Sidebar = ({ file, onClose }) => {
                                             {val.indicators.map((ind, i) => (
                                                 <li key={i}>{ind}</li>
                                             ))}
+                                            {/* Show specific values if available (Secrets) */}
+                                            {val.values && val.values.map((v, i) => (
+                                                <li key={`val-${i}`} className="text-red-400 font-mono bg-red-900/10 px-1 rounded break-all">
+                                                    {v}
+                                                </li>
+                                            ))}
                                         </ul>
                                     )}
 
-                                    {val.findings && (
+                                    {/* Special handling for hidden_content to ensure specific keys are shown */}
+                                    {key === 'hidden_content' ? (
                                         <div className="mt-1 space-y-1">
-                                            {Object.entries(val.findings).map(([fKey, fVal]) => (
-                                                <div key={fKey} className="text-xs text-red-300">
-                                                    <span className="font-mono">{fKey}: </span>
-                                                    {typeof fVal === 'object' && fVal !== null
-                                                        ? (fVal.count ? `${fVal.count} matches` : fVal.value)
-                                                        : fVal}
-                                                </div>
-                                            ))}
+                                            {['alternate_data_streams', 'trailing_data', 'embedded_files', 'polyglot'].map(field => {
+                                                const fVal = val.findings ? val.findings[field] : null;
+                                                return (
+                                                    <div key={field} className="text-xs text-gray-400">
+                                                        <span className="font-mono text-gray-500">{field}: </span>
+                                                        {fVal ? (
+                                                            <span className="text-red-300">
+                                                                {typeof fVal === 'object' ? JSON.stringify(fVal) : String(fVal)}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-gray-600 italic">None</span>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                            {/* Render other finding keys if any */}
+                                            {val.findings && Object.entries(val.findings)
+                                                .filter(([k]) => !['alternate_data_streams', 'trailing_data', 'embedded_files', 'polyglot'].includes(k))
+                                                .map(([fKey, fVal]) => (
+                                                    <div key={fKey} className="text-xs text-red-300">
+                                                        <span className="font-mono">{fKey}: </span>
+                                                        {typeof fVal === 'object' && fVal !== null
+                                                            ? (fVal.count ? `${fVal.count} matches` : fVal.value)
+                                                            : fVal}
+                                                    </div>
+                                                ))}
                                         </div>
+                                    ) : (
+                                        val.findings && (
+                                            <div className="mt-1 space-y-1">
+                                                {Object.entries(val.findings).map(([fKey, fVal]) => (
+                                                    <div key={fKey} className="text-xs text-red-300">
+                                                        <span className="font-mono">{fKey}: </span>
+                                                        {typeof fVal === 'object' && fVal !== null
+                                                            ? (fVal.count ? `${fVal.count} matches` : fVal.value)
+                                                            : fVal}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )
                                     )}
                                 </div>
                             );

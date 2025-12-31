@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from './api';
 import Sidebar from './components/Sidebar';
 
 function Files() {
@@ -7,6 +7,7 @@ function Files() {
     const [selectedFile, setSelectedFile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
     const [indexingStatus, setIndexingStatus] = useState({ status: 'idle', current: 0, total: 0 });
 
     // Filters
@@ -22,7 +23,7 @@ function Files() {
         // Polling for indexing status
         const interval = setInterval(async () => {
             try {
-                const res = await axios.get('http://localhost:8000/status');
+                const res = await api.get('/status');
                 setIndexingStatus(res.data);
 
                 // Reload files if finished just now (simple check)
@@ -35,25 +36,55 @@ function Files() {
         }, 1000);
 
         return () => clearInterval(interval);
-    }, [indexingStatus.status, filterStatus]); // Re-fetch on filter change
+    }, [indexingStatus.status]); // Only re-run if indexing status changes, not filterStatus
 
-    const fetchFiles = async () => {
+    // Effect for fetching files based on filters and search query
+    useEffect(() => {
+        fetchFiles();
+    }, [filterStatus, searchQuery]); // Re-fetch on filterStatus or searchQuery change
+
+    const fetchFiles = async (overrideQuery = null) => {
+        setLoading(true);
         try {
+            const q = overrideQuery !== null ? overrideQuery : searchQuery;
+            const params = {};
+
             // Pass risk_level filter to backend
-            const params = filterStatus !== 'All' ? { risk_level: filterStatus } : {};
-            const res = await axios.get('http://localhost:8000/files', { params });
-            setFiles(res.data.files || res.data); // Handle {files: []} or []
-            setLoading(false);
+            if (filterStatus !== 'All') {
+                params.risk_level = filterStatus;
+            }
+
+            // Only send q if >= 4 chars or explicit override (or cleared)
+            if (q && q.length >= 4) {
+                params.q = q;
+            } else if (q === '') { // If query is explicitly cleared, ensure 'q' param is not sent
+                // No 'q' param needed
+            }
+
+            const res = await api.get('/files', { params });
+            setFiles(res.data.files); // Handle {files: []}
+            setError(''); // Clear any previous error
         } catch (e) {
             console.error(e);
             setError('Unable to load file list.');
+        } finally {
             setLoading(false);
+        }
+    };
+
+    const handleSearch = (e) => {
+        const val = e.target.value;
+        setSearchQuery(val);
+
+        // Auto-trigger if >= 4 chars or cleared
+        if (val.length >= 4 || val.length === 0) {
+            // fetchFiles will be triggered by the useEffect dependency on searchQuery
         }
     };
 
     const triggerLoad = async () => {
         try {
-            await axios.post('http://localhost:8000/load');
+            await api.post('/load');
             // Status polling will pick it up
         } catch (e) {
             alert("Error starting index: " + e.message);
@@ -147,6 +178,23 @@ function Files() {
 
             {/* Filters Section */}
             <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-wrap gap-4 items-end">
+                {/* Search Input */}
+                <div className="w-full md:w-64">
+                    <label className="block text-xs text-gray-400 mb-1">Filename Search</label>
+                    <div className="relative">
+                        <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </div>
+                        <input
+                            type="text"
+                            className="bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full pl-10 p-2.5 placeholder-gray-600"
+                            placeholder="Type (min 4 chars)..."
+                            value={searchQuery}
+                            onChange={handleSearch}
+                        />
+                    </div>
+                </div>
+
                 <div>
                     <label className="block text-xs text-gray-400 mb-1">Text Found</label>
                     <select

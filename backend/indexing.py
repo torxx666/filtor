@@ -1,7 +1,9 @@
 import os
 import json
 import traceback
+import time
 from datetime import datetime
+import hashlib
 from loguru import logger
 from database import get_db_connection
 from analyse.deep_forensics import DeepFileAnalyzer, DeepAnalysisResult
@@ -53,7 +55,7 @@ class Files:
     def detect_legacy_type(filepath):
         # ... logic ...
         # Since we use forensic.py effectively, this might be redundant, 
-        # but let's keep the basic mapping for 'true_type' if forensic fails or for fallback
+        # but we use it for some lookups if needed
         ext = os.path.splitext(filepath)[1].lower()
         if ext in ['.zip', '.rar', '.7z']: return "ZIP Archive"
         if ext == '.jar': return "JAR Archive"
@@ -97,15 +99,38 @@ def extract_text_content(filepath, mime_type, mode="DEEP"):
             pass
 
         # 3. Check for unsupported binary extensions BEFORE importing/using textract
-        # Textract fails hard on .exe, .dll, etc.
-        binary_exts = ['.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.db', '.sqlite']
+        # Textract fails hard on .exe, .dll, etc. AND archives which it doesn't support
+        binary_exts = [
+            '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.db', '.sqlite',
+            '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.iso', '.dmg'
+        ]
         if any(filepath.lower().endswith(ext) for ext in binary_exts):
              return ""
+        
+        # Check for fake .doc files (antiword crashes on non-OLE)
+        if filepath.lower().endswith('.doc'):
+             try:
+                 with open(filepath, 'rb') as f:
+                     # OLE2 Signature D0 CF 11 E0 A1 B1 1A E1
+                     if f.read(8) != b'\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1':
+                         logger.info(f"Skipping Textract for {filepath}: Invalid .doc signature")
+                         return ""
+             except:
+                 pass
         
         # Also skip if mime is strictly octet-stream and not one of our handled types
         if mime_type == 'application/octet-stream':
              return ""
 
+        # Check for MZ header (Executable) to prevent Tesseract from choking on renamed exes (e.g., funny_cat.jpg)
+        try:
+            with open(filepath, 'rb') as f:
+                if f.read(2) == b'MZ':
+                    logger.info(f"Skipping OCR/Text extraction for {filepath}: Detected EXE signature (MZ)")
+                    return ""
+        except:
+            pass
+            
         import textract
         # textract returns bytes, we need to decode
         try:
@@ -152,7 +177,7 @@ def extract_text_content(filepath, mime_type, mode="DEEP"):
         logger.warning(f"Text extraction failed for {filepath}: {e}")
         return ""
 
-def get_file_diff(folder_path, requested_mode="DEEP"):
+def get_file_diff(folder_path, requested_mode="DEEP", current_kw_hash=None):
     """
     Compares current filesystem with DB to identify changes.
     Also checks if simpler scan needs upgrade (FAST -> DEEP).
@@ -161,21 +186,24 @@ def get_file_diff(folder_path, requested_mode="DEEP"):
     # Get DB files
     conn = get_db_connection()
     c = conn.cursor()
-    # Check if scan_mode column exists (it should due to init_db but safe to handle old rows gracefully)
+    # Check if scan_mode/keywords_hash column exists
     try:
-        rows = c.execute("SELECT id, path, size, mtime, scan_mode FROM files").fetchall()
+        rows = c.execute("SELECT id, path, size, mtime, scan_mode, keywords_hash FROM files").fetchall()
     except:
-        # Fallback if column missing in runtime cache somehow
-        rows = c.execute("SELECT id, path, size, mtime FROM files").fetchall()
+        try:
+             # Try without hash if migration failed
+             rows = c.execute("SELECT id, path, size, mtime, scan_mode FROM files").fetchall()
+        except:
+             rows = c.execute("SELECT id, path, size, mtime FROM files").fetchall()
         
     conn.close()
     
     db_files = {}
     for row in rows:
         p = os.path.normpath(row['path'])
-        # Handle missing scan_mode (treat as 'unknown' or 'fast' implicitly? safer to assume None)
         mode = row['scan_mode'] if 'scan_mode' in row.keys() else None
-        db_files[p] = {'id': row['id'], 'size': row['size'], 'mtime': row['mtime'], 'scan_mode': mode}
+        kh = row['keywords_hash'] if 'keywords_hash' in row.keys() else None
+        db_files[p] = {'id': row['id'], 'size': row['size'], 'mtime': row['mtime'], 'scan_mode': mode, 'keywords_hash': kh}
         
     # Get Current files
     fs_files = {}
@@ -186,6 +214,15 @@ def get_file_diff(folder_path, requested_mode="DEEP"):
                 stat = os.stat(filepath)
                 p = os.path.normpath(filepath)
                 fs_files[p] = {'size': stat.st_size, 'mtime': stat.st_mtime, 'abspath': filepath}
+            except OSError:
+                if os.path.islink(filepath):
+                    try:
+                        target = os.readlink(filepath)
+                        logger.warning(f"Skipping broken symlink: {filepath} -> {target} (Target path likely not mounted in Docker)")
+                    except:
+                        logger.warning(f"Skipping broken symlink: {filepath}")
+                else:
+                    logger.warning(f"Could not stat file {filepath}")
             except Exception as e:
                 logger.warning(f"Could not stat file {filepath}: {e}")
 
@@ -203,18 +240,35 @@ def get_file_diff(folder_path, requested_mode="DEEP"):
             is_modified = False
             if stats['size'] != db_stats['size']:
                 is_modified = True
-            elif db_stats['mtime'] is None or abs(stats['mtime'] - db_stats['mtime']) > 0.001:
+            elif db_stats['mtime'] is None or abs(stats['mtime'] - db_stats['mtime']) > 1.0:
                 is_modified = True
             
-            # Check for Mode Upgrade (FAST -> DEEP)
-            # If current DB is FAST, and we request DEEP, we must re-scan.
-            # If current DB is DEEP, and we request FAST, no need to re-scan (unless modified).
-            needs_upgrade = False
+            # Check for Mode Change
+            needs_mode_sync = False
             stored_mode = db_stats.get('scan_mode')
-            if requested_mode == "DEEP" and stored_mode != "DEEP":
-                 needs_upgrade = True
+            if requested_mode and stored_mode != requested_mode:
+                 # Optimize: If we have DEEP results, they satisfy a FAST request. Don't downgrade/re-scan.
+                 if stored_mode == 'DEEP' and requested_mode == 'FAST':
+                     needs_mode_sync = False
+                 else:
+                     needs_mode_sync = True
+            
+            # Check for Keywords Change
+            # If the stored hash differs from current, we must re-scan to find new secrets
+            needs_kw_sync = False
+            stored_hash = db_stats.get('keywords_hash')
+            if current_kw_hash and stored_hash != current_kw_hash:
+                 needs_kw_sync = True
                  
-            if is_modified or needs_upgrade:
+            if is_modified or needs_mode_sync or needs_kw_sync:
+                # DEBUG: Log reason for update
+                reason = []
+                if stats['size'] != db_stats['size']: reason.append(f"Size({stats['size']}!={db_stats['size']})")
+                if db_stats['mtime'] is None or abs(stats['mtime'] - db_stats['mtime']) > 1.0: reason.append(f"Time({stats['mtime']}!={db_stats['mtime']})")
+                if needs_mode_sync: reason.append(f"Mode({stored_mode}->{requested_mode})")
+                if needs_kw_sync: reason.append(f"Keywords({stored_hash}!=current)")
+                
+                logger.debug(f"File marked for update {path}: {', '.join(reason)}")
                 to_update.append(path)
                 
     # Check Deletes
@@ -229,7 +283,19 @@ def detect_file_changes(folder_path):
     Checks if there are any changes (wrapper for main.py compatibility).
     """
     try:
-        to_add, to_update, to_delete, _ = get_file_diff(folder_path)
+        # We assume empty keyword hash for auto-detection or we can fetch it. 
+        # Ideally auto-scan should also respect keyword changes.
+        # Let's fetch it briefly.
+        kw_hash = None
+        try:
+             conn = get_db_connection()
+             rows = conn.execute("SELECT keyword FROM keywords ORDER BY keyword").fetchall()
+             all_kws = "".join([r['keyword'] for r in rows])
+             kw_hash = hashlib.md5(all_kws.encode()).hexdigest()
+             conn.close()
+        except: pass
+        
+        to_add, to_update, to_delete, _ = get_file_diff(folder_path, requested_mode="FAST", current_kw_hash=kw_hash)
         has_changes = bool(to_add or to_update or to_delete)
         if has_changes:
             logger.info(f"Change detection: Found changes (+{len(to_add)}, ~{len(to_update)}, -{len(to_delete)})")
@@ -243,16 +309,34 @@ def detect_file_changes(folder_path):
 def process_indexing(folder_path, mode="DEEP"):
     global indexing_state
     indexing_state["mode"] = mode
+    start_time = time.time()
     
     logger.info(f"Starting indexing for folder: {folder_path} (mode: {mode})")
-    analyzer = DeepFileAnalyzer()
+    
+    # Fetch custom keywords for analysis & Compute Hash
+    custom_keywords = []
+    keywords_hash = None
+    try:
+        conn = get_db_connection()
+        rows = conn.execute("SELECT keyword FROM keywords ORDER BY keyword").fetchall()
+        custom_keywords = [r['keyword'] for r in rows]
+        
+        # Compute Hash (MD5 of sorted keywords)
+        all_kws = "".join(custom_keywords)
+        keywords_hash = hashlib.md5(all_kws.encode()).hexdigest()
+        
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Could not fetch custom keywords: {e}")
+
+    analyzer = DeepFileAnalyzer(custom_keywords=custom_keywords)
     
     try:
         indexing_state["status"] = "scanning"
         indexing_state["message"] = "Calculating file changes..."
         
-        # 1. Calculate Diff
-        to_add, to_update, to_delete, db_files_map = get_file_diff(folder_path, requested_mode=mode)
+        # 1. Calculate Diff (Pass Keyword Hash)
+        to_add, to_update, to_delete, db_files_map = get_file_diff(folder_path, requested_mode=mode, current_kw_hash=keywords_hash)
         
         total_changes = len(to_add) + len(to_update) + len(to_delete)
         if total_changes == 0:
@@ -324,11 +408,11 @@ def process_indexing(folder_path, mode="DEEP"):
                 if not mime_type: mime_type = "application/octet-stream"
                 
                 c.execute('''
-                    INSERT INTO files (filename, path, size, type, created_at, true_type, has_text, info, details, risk_level, risk_score, mtime, scan_mode)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO files (filename, path, size, type, created_at, true_type, has_text, info, details, risk_level, risk_score, mtime, scan_mode, keywords_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     filename, filepath, size, ext, ctime, mime_type, 0, 
-                    "Indexing...", "{}", "PENDING", 0.0, mtime, mode
+                    "Indexing...", "{}", "PENDING", 0.0, mtime, mode, keywords_hash
                 ))
                 file_id = c.lastrowid
                 file_ids_map[filepath] = file_id
@@ -393,7 +477,7 @@ def process_indexing(folder_path, mode="DEEP"):
                     'risk_level': risk_level,
                     'risk_score': risk_score,
                     'detections': {
-                        'security_issues': {'indicators': res.security_issues, 'risk_points': len(res.security_issues) * 10},
+                        'security_issues': {'indicators': res.security_issues, 'values': res.findings.get('text', {}).get('secrets_found', []) + res.findings.get('executable', {}).get('suspicious_indicators', []), 'risk_points': len(res.security_issues) * 10},
                         'risk_indicators': {'indicators': res.risk_indicators, 'risk_points': len(res.risk_indicators) * 5},
                         'hidden_content': {'findings': res.hidden_content, 'risk_points': 20 if res.hidden_content.get('polyglot') else 0}
                     },
@@ -406,11 +490,12 @@ def process_indexing(folder_path, mode="DEEP"):
                 if res.risk_indicators: info_parts.append(f"RISK: {risk_level}")
                 info = " | ".join(info_parts) if info_parts else "Clean"
                 
+                # Update with scan_mode and keywords_hash to confirm this version
                 c.execute('''
                     UPDATE files 
-                    SET info = ?, details = ?, risk_level = ?, risk_score = ?, true_type = ?, scan_mode = ?
+                    SET info = ?, details = ?, risk_level = ?, risk_score = ?, true_type = ?, scan_mode = ?, keywords_hash = ?
                     WHERE id = ?
-                ''', (info, details_json, risk_level, risk_score, res.file_type, mode, file_id))
+                ''', (info, details_json, risk_level, risk_score, res.file_type, mode, keywords_hash, file_id))
                 
                 # FAST MODE STOP
                 if mode == "FAST" and risk_score >= 90:
@@ -440,3 +525,7 @@ def process_indexing(folder_path, mode="DEEP"):
         traceback.print_exc()
         indexing_state["status"] = "error"
         indexing_state["message"] = f"Error during indexing: {str(e)}"
+    finally:
+        if 'start_time' in locals():
+            duration = time.time() - start_time
+            logger.info(f"SCAN DURATION ({mode}): {duration:.2f} seconds")
